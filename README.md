@@ -1,53 +1,28 @@
 # LiveCaptionsTXTRecorder
 
-A lightweight Windows 11 tool that saves Windows Live Captions directly to TXT files.
+A lightweight Windows 11 app that saves Windows Live Captions directly to TXT files.
 
 ## Features
-
-- Automatically opens Windows Live Captions
-- Saves captions to TXT
-- Pause / Continue
-- Stop & Save
-- Automatically saves if Live Captions is closed
-- Supports Windows light and dark mode
-- High-DPI display support
-- No Python installation required for the packaged EXE
+- System Audio & Microphone modes
+- Five UI languages: English, 한국어, 简体中文, 繁體中文, 日本語
+- Microphone selection and real-time input level
+- Pause / Continue / Stop & Save
+- Automatic TXT saving when Live Captions closes
+- Light/Dark mode and draggable window
 
 ## Requirements
-
-- Windows 11
-- Windows Live Captions
-
-Tested on Windows 11 x64. Other system configurations may vary.
+- Windows 11 with Windows Live Captions
+- No Python installation required for the EXE
 
 ## Download
 
-Download the latest version from **Releases**:
-
-`LiveCaptionsTXTRecorder.exe`
+Download `LiveCaptionsTXTRecorder_v1.1.0.exe` from [Releases](https://github.com/kidoyuyu/LiveCaptionsTXTRecorder/releases).
 
 ## How to Use
 
-1. Open `LiveCaptionsTXTRecorder.exe`
-2. Choose a TXT save location
-3. Click **Start Recording**
-4. Use **Pause / Continue** when needed
-5. Click **Stop & Save** to finish
+1. Open the EXE and choose your UI language.
+2. Select System Audio or Microphone.
+3. Choose a save location and click **Start Recording**.
+4. Click **Stop & Save** to export the TXT file.
 
-If Windows Live Captions is closed while recording, the current TXT file is saved automatically.
-
-## Notes
-
-- Speech recognition is provided by Windows Live Captions
-- The app includes duplicate-reduction logic
-- TXT files support Korean, Chinese, Japanese, English, and other languages supported by Windows Live Captions
-
-## Source Code
-
-Main source file:
-
-`LiveCaptions.py`
-
-## License
-
-MIT License
+*Note: UI language selection does not change the speech recognition language.*
