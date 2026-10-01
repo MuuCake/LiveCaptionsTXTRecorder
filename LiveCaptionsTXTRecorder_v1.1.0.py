@@ -39,7 +39,7 @@ LONG_REPEAT_MIN = 80
 INVALID_FILENAME_CHARS = '[<>:"/\\\\|?*]'
 MODE_SYSTEM = 'system'
 MODE_MICROPHONE = 'microphone'
-GITHUB_URL = 'https://github.com/kidoyuyu/LiveCaptionsTXTRecorder'
+GITHUB_URL = 'https://github.com/MuuCake/LiveCaptionsTXTRecorder'
 
 def enable_high_dpi_awareness():
     try:
@@ -744,7 +744,7 @@ class LiveCaptionsRecorder:
         self.footer_frame.pack(side='bottom', fill='x', padx=34, pady=(0, 16))
         self.footer_prefix = ttk.Label(self.footer_frame, text=self.t('LiveCaptionsTXTRecorder  ·  '), style='Footer.TLabel')
         self.footer_prefix.pack(side='left')
-        self.author_link = tk.Label(self.footer_frame, text=self.t('by kidoyuyu'), font=('Segoe UI', 9), cursor='hand2', bd=0, highlightthickness=0)
+        self.author_link = tk.Label(self.footer_frame, text=self.t('by MuuCake'), font=('Segoe UI', 9), cursor='hand2', bd=0, highlightthickness=0)
         self.author_link.pack(side='left')
         self.author_link.bind('<Button-1>', lambda event: webbrowser.open(GITHUB_URL))
         self.author_link.bind('<Enter>', self.on_author_enter)
