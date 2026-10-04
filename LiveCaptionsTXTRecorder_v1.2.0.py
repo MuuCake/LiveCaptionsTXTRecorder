@@ -749,11 +749,102 @@ class LiveCaptionsRecorder:
         self.author_link.bind('<Button-1>', lambda event: webbrowser.open(GITHUB_URL))
         self.author_link.bind('<Enter>', self.on_author_enter)
         self.author_link.bind('<Leave>', self.on_author_leave)
-        self.main = ttk.Frame(self.root, style='App.TFrame', padding=(34, 26))
-        self.main.pack(fill='both', expand=True)
+       
+        # Scrollable main page
+
+        self.main_holder = ttk.Frame(
+            self.root, style='App.TFrame'
+        )
+        self.main_holder.pack(fill='both', expand=True)
+
+        self.main_canvas = tk.Canvas(
+            self.main_holder,
+            bg='#f5f5f5',
+            highlightthickness=0,
+            bd=0
+        )
+
+        self.main_scrollbar = ttk.Scrollbar(
+            self.main_holder,
+            orient='vertical',
+            command=self.main_canvas.yview
+        )
+
+        self.main_canvas.configure(
+            yscrollcommand=self.main_scrollbar.set
+        )
+
+        self.main_scrollbar.pack(side='right', fill='y')
+        self.main_canvas.pack(side='left', fill='both', expand=True)
+
+        self.main = ttk.Frame(
+            self.main_canvas,
+            style='App.TFrame',
+            padding=(34, 26)
+        )
+
+        self._main_item = self.main_canvas.create_window(
+            (0, 0),
+            window=self.main,
+            anchor='nw'
+        )
+
+        self.main.bind(
+            '<Configure>',
+            lambda e: self.main_canvas.configure(
+                scrollregion=self.main_canvas.bbox('all')
+            )
+        )
+
+        self.main_canvas.bind(
+            '<Configure>',
+            lambda e: self.main_canvas.itemconfigure(
+                self._main_item,
+                width=e.width
+            )
+        )
+
+        self.root.bind_all(
+            '<MouseWheel>',
+            self._on_main_wheel,
+            add='+'
+        )
+
         self.build_home_page()
         self.build_detail_page()
         self.show_home()
+        
+    def _on_main_wheel(self, event):
+
+        if not self.main_canvas.winfo_viewable() or not event.delta:
+            return
+
+        # The preview keeps its own scrolling behavior.
+        if event.widget in (
+            getattr(self, 'preview_text', None),
+            getattr(self, 'preview_scroll', None)
+        ):
+            return
+
+        if event.widget.winfo_class() in ('TCombobox', 'Combobox'):
+            return
+
+        x, y = self.root.winfo_pointerxy()
+
+        left = self.main_canvas.winfo_rootx()
+        top = self.main_canvas.winfo_rooty()
+
+        if (
+            left <= x < left + self.main_canvas.winfo_width()
+            and top <= y < top + self.main_canvas.winfo_height()
+        ):
+            self.main_canvas.yview_scroll(
+                -3 if event.delta > 0 else 3,
+                'units'
+            )
+
+            return 'break'
+
 
     def build_home_page(self):
         self.home_page = ttk.Frame(self.main, style='App.TFrame')
@@ -938,6 +1029,10 @@ class LiveCaptionsRecorder:
         else:
             colors = {'bg': '#f5f5f5', 'card': '#ffffff', 'status': '#ffffff', 'text': '#1a1a1a', 'muted': '#666666', 'entry': '#ffffff', 'border': '#d0d0d0', 'button': '#ffffff', 'button_hover': '#eeeeee', 'button_pressed': '#e2e2e2', 'disabled': '#9a9a9a', 'accent': '#0f6cbd', 'accent_hover': '#115ea3', 'warning': '#8a5a00', 'link': '#0067c0'}
         self.colors = colors
+        
+        if hasattr(self, 'main_canvas'):
+            self.main_canvas.configure(bg=colors['bg'])
+
         self.root.configure(bg=colors['bg'])
         self.style.configure('App.TFrame', background=colors['bg'])
         self.style.configure('Card.TFrame', background=colors['card'])
@@ -1960,9 +2055,2251 @@ class LiveCaptionsRecorder:
         except Exception:
             pass
         self.root.destroy()
+
+# ---------------------- v1.2.0 additions ----------------------
+# Keep all v1.1.0 code above this section.
+
+
+class LiveCaptionsRecorderV12(LiveCaptionsRecorder):
+
+    BACKUP_INTERVAL_MS = 60_000
+    PREVIEW_TEXT_LIMIT = 30_000
+
+    EXTRA_UI = {
+        'en': (
+            'Include TXT timestamps (caption detection time)',
+            'Show Preview',
+            'Hide Preview',
+            'Live Preview',
+            'Current caption (not final)',
+            'An unfinished recording backup was preserved at:\n\n',
+            'Could not preserve the previous backup:\n\n',
+            'Automatic backup failed:\n\n'
+        ),
+        'ko': (
+            'TXT 타임스탬프 포함 (자막 감지 시각)',
+            '미리보기 표시',
+            '미리보기 숨기기',
+            '실시간 미리보기',
+            '현재 자막 (확정 전)',
+            '이전 기록의 복구 파일을 보존했습니다:\n\n',
+            '이전 백업을 보존하지 못했습니다:\n\n',
+            '자동 백업에 실패했습니다:\n\n'
+        ),
+        'zh_CN': (
+            'TXT 时间戳（字幕检测时间）',
+            '显示实时预览',
+            '隐藏实时预览',
+            '实时文字预览',
+            '当前字幕（尚未确认）',
+            '已保留上次未正常结束的恢复文件：\n\n',
+            '无法保留上一次的恢复文件：\n\n',
+            '自动备份失败：\n\n'
+        ),
+        'zh_TW': (
+            'TXT 時間戳（字幕偵測時間）',
+            '顯示即時預覽',
+            '隱藏即時預覽',
+            '即時文字預覽',
+            '目前字幕（尚未確認）',
+            '已保留上次未正常結束的復原檔案：\n\n',
+            '無法保留上一份復原檔案：\n\n',
+            '自動備份失敗：\n\n'
+        ),
+        'ja': (
+            'TXTタイムスタンプ（字幕検出時刻）',
+            'プレビューを表示',
+            'プレビューを非表示',
+            'リアルタイムプレビュー',
+            '現在の字幕（未確定）',
+            '前回の復元用ファイルを保存しました：\n\n',
+            '前回のバックアップを保存できません：\n\n',
+            '自動バックアップに失敗しました：\n\n'
+        )
+    }
+
+    def __init__(self, root):
+
+        self.timestamps_var = tk.BooleanVar(
+            master=root,
+            value=False
+        )
+
+        self._timestamps_active = False
+        self._io_lock = threading.RLock()
+
+        self._preview_queue = queue.Queue()
+        self._preview_visible = False
+
+        self._preview_saved = ''
+        self._preview_live = ''
+        self._old_preview_height = None
+
+        self._session_serial = 0
+        self._backup_serial = 0
+
+        self._backup_path = None
+        self._backup_warning_shown = False
+        self._write_failed = False
+
+        self._capture_started_at = None
+        self._pending_first_seen = None
+        self._mismatch_first_seen = None
+
+        self._ignored_baseline = ''
+
+        super().__init__(root)
+
+        self.root.after(
+            100,
+            self._drain_preview_queue
+        )
+
+    def extra(self, index):
+
+        return self.EXTRA_UI.get(
+            self.language_code,
+            self.EXTRA_UI['en']
+        )[index]
+
+    # ---------------------------------------------------------
+    # New UI
+    # ---------------------------------------------------------
+
+    def build_detail_page(self):
+
+        super().build_detail_page()
+
+        self.extra_options = ttk.Frame(
+            self.detail_page,
+            style='App.TFrame'
+        )
+
+        self.extra_options.pack(
+            fill='x',
+            before=self.button_frame
+        )
+
+        self.timestamp_check = ttk.Checkbutton(
+            self.extra_options,
+            text=self.extra(0),
+            variable=self.timestamps_var,
+            style='Extra.TCheckbutton'
+        )
+
+        self.timestamp_check.pack(anchor='w')
+
+        self.preview_row = ttk.Frame(
+            self.detail_page,
+            style='App.TFrame'
+        )
+
+        self.preview_row.pack(
+            fill='x',
+            pady=(0, 8),
+            before=self.status_frame
+        )
+
+        self.preview_button = ttk.Button(
+            self.preview_row,
+            text=self.extra(1),
+            style='Secondary.TButton',
+            command=self.toggle_preview
+        )
+
+        self.preview_button.pack(side='right')
+
+        self.preview_panel = ttk.Frame(
+            self.detail_page,
+            style='Card.TFrame',
+            padding=(12, 8)
+        )
+
+        self.preview_heading = ttk.Label(
+            self.preview_panel,
+            text=self.extra(3),
+            style='Body.TLabel'
+        )
+
+        self.preview_heading.pack(
+            anchor='w',
+            pady=(0, 5)
+        )
+
+        text_row = ttk.Frame(
+            self.preview_panel,
+            style='Card.TFrame'
+        )
+
+        text_row.pack(
+            fill='both',
+            expand=True
+        )
+
+        self.preview_text = tk.Text(
+            text_row,
+            wrap='word',
+            height=7,
+            state='disabled',
+            font=('Segoe UI', 10),
+            relief='flat',
+            bd=0,
+            padx=7,
+            pady=5,
+            takefocus=False
+        )
+
+        self.preview_scroll = ttk.Scrollbar(
+            text_row,
+            orient='vertical',
+            command=self.preview_text.yview
+        )
+
+        self.preview_text.configure(
+            yscrollcommand=self.preview_scroll.set
+        )
+
+        self.preview_scroll.pack(
+            side='right',
+            fill='y'
+        )
+
+        self.preview_text.pack(
+            side='left',
+            fill='both',
+            expand=True
+        )
+
+    # ---------------------------------------------------------
+    # Theme and language
+    # ---------------------------------------------------------
+
+    def apply_system_theme(self, force=False):
+
+        super().apply_system_theme(force=force)
+
+        if not hasattr(self, 'preview_text'):
+            return
+
+        c = self.colors
+
+        self.style.configure(
+            'Extra.TCheckbutton',
+            background=c['bg'],
+            foreground=c['text'],
+            font=('Segoe UI', 9)
+        )
+
+        self.style.map(
+            'Extra.TCheckbutton',
+            background=[('active', c['bg'])],
+            foreground=[('disabled', c['disabled'])]
+        )
+
+        self.preview_text.configure(
+            bg=c['entry'],
+            fg=c['text'],
+            insertbackground=c['text'],
+            selectbackground=c['accent']
+        )
+
+    def change_language(self, event=None):
+
+        super().change_language(event)
+
+        self.timestamp_check.configure(
+            text=self.extra(0)
+        )
+
+        self.preview_button.configure(
+            text=(
+                self.extra(2)
+                if self._preview_visible
+                else self.extra(1)
+            )
+        )
+
+        self.preview_heading.configure(
+            text=self.extra(3)
+        )
+
+        self._render_preview()
+
+    # ---------------------------------------------------------
+    # Live Preview
+    # ---------------------------------------------------------
+
+  
+    def toggle_preview(self):
+
+        self._preview_visible = not self._preview_visible
+
+        if self._preview_visible:
+
+            self.preview_panel.pack(
+                fill='x',
+                pady=(0, 10),
+                before=self.status_frame
+            )
+
+            self.preview_button.configure(
+                text=self.extra(2)
+            )
+
+            self._render_preview()
+
+        else:
+
+            self.preview_panel.pack_forget()
+
+            self.preview_button.configure(
+                text=self.extra(1)
+            )
+
+
+
+    def _render_preview(self):
+
+        if not self._preview_visible:
+            return
+
+        text = self._preview_saved[-self.PREVIEW_TEXT_LIMIT:]
+
+        if (
+            self.recording
+            and not self.paused
+            and self._preview_live
+        ):
+
+            if text:
+                text += '\n'
+
+            text += (
+                self.extra(4)
+                + ':\n'
+                + self._preview_live[-1000:]
+                + '\n'
+            )
+
+        box = self.preview_text
+
+        box.configure(state='normal')
+        box.delete('1.0', 'end')
+        box.insert('end', text)
+        box.see('end')
+        box.configure(state='disabled')
+
+    def _drain_preview_queue(self):
+
+        updated = False
+
+        try:
+
+            while True:
+
+                serial, kind, value = (
+                    self._preview_queue.get_nowait()
+                )
+
+                if serial != self._session_serial:
+                    continue
+
+                if kind == 'line':
+
+                    self._preview_saved = (
+                        self._preview_saved
+                        + value
+                        + '\n'
+                    )[-self.PREVIEW_TEXT_LIMIT:]
+
+                elif kind == 'live':
+
+                    self._preview_live = value
+
+                updated = True
+
+        except queue.Empty:
+            pass
+
+        if updated:
+            self._render_preview()
+
+        self.root.after(
+            100,
+            self._drain_preview_queue
+        )
+
+    # ---------------------------------------------------------
+    # TXT Timestamps
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def _format_elapsed(seconds):
+
+        seconds = max(0, int(seconds))
+
+        hours, remainder = divmod(seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+
+        return f'{hours:02d}:{minutes:02d}:{secs:02d}'
+
+    # ---------------------------------------------------------
+    # Automatic Backup
+    # ---------------------------------------------------------
+
+    def _preserve_older_backup(self, target):
+
+        old = target + '.autosave.txt'
+
+        if not os.path.isfile(old):
+            return True
+
+        prefix, _ = os.path.splitext(target)
+
+        stamp = datetime.now().strftime(
+            '%Y%m%d_%H%M%S'
+        )
+
+        preserved = f'{prefix}_recovered_{stamp}.txt'
+
+        n = 2
+
+        while os.path.exists(preserved):
+
+            preserved = (
+                f'{prefix}_recovered_{stamp}_{n}.txt'
+            )
+
+            n += 1
+
+        try:
+
+            os.replace(old, preserved)
+
+        except OSError as error:
+
+            messagebox.showerror(
+                self.t('Error'),
+                self.extra(6) + str(error)
+            )
+
+            return False
+
+        messagebox.showinfo(
+            self.t('Saved'),
+            self.extra(5) + preserved
+        )
+
+        return True
+
+    def _backup_now(self, serial):
+
+        if (
+            not self.recording
+            or serial != self._backup_serial
+        ):
+            return
+
+        temp_path = self._backup_path + '.tmp'
+
+        try:
+
+            with self._io_lock:
+
+                if not self.file_handle:
+                    return
+
+                self.file_handle.flush()
+
+                os.fsync(
+                    self.file_handle.fileno()
+                )
+
+                # Use atomic replacement to protect the
+                # previous backup if copying is interrupted.
+
+                with open(
+                    self.output_path,
+                    'rb'
+                ) as source:
+
+                    with open(
+                        temp_path,
+                        'wb'
+                    ) as destination:
+
+                        while True:
+
+                            chunk = source.read(
+                                1024 * 1024
+                            )
+
+                            if not chunk:
+                                break
+
+                            destination.write(chunk)
+
+                        destination.flush()
+
+                        os.fsync(
+                            destination.fileno()
+                        )
+
+                os.replace(
+                    temp_path,
+                    self._backup_path
+                )
+
+        except OSError as error:
+
+            if not self._backup_warning_shown:
+
+                self._backup_warning_shown = True
+
+                messagebox.showwarning(
+                    self.t('Error'),
+                    self.extra(7) + str(error)
+                )
+
+        finally:
+
+            if (
+                self.recording
+                and serial == self._backup_serial
+            ):
+
+                self.root.after(
+                    self.BACKUP_INTERVAL_MS,
+                    lambda sid=serial: self._backup_now(sid)
+                )
+
+    # ---------------------------------------------------------
+    # Recording Controls
+    # ---------------------------------------------------------
+
+    def set_session_controls(self, active):
+
+        if active:
+
+            self._capture_started_at = time.monotonic()
+
+            self._timestamps_active = (
+                self.timestamps_var.get()
+            )
+
+        super().set_session_controls(active)
+
+        if hasattr(self, 'timestamp_check'):
+
+            self.timestamp_check.configure(
+                state=(
+                    'disabled'
+                    if active
+                    else 'normal'
+                )
+            )
+
+    def start_recording(self):
+
+        if self.recording:
+            return
+
+        name = self.filename.get().strip()
+
+        if name and not name.lower().endswith('.txt'):
+            name += '.txt'
+
+        target = os.path.join(
+            self.save_folder.get().strip(),
+            name
+        )
+
+        # Preserve a backup from an interrupted session
+        # before starting another recording.
+
+        if (
+            self.current_mode is not None
+            and not self.mode_configuring
+            and not self.mode_startup_pending
+            and self.find_livecaptions_hwnd()
+            and os.path.isdir(
+                self.save_folder.get().strip()
+            )
+            and not re.search(
+                INVALID_FILENAME_CHARS,
+                name
+            )
+            and not self._preserve_older_backup(target)
+        ):
+
+            return
+
+        self._session_serial += 1
+
+        self._capture_started_at = None
+        self._pending_first_seen = None
+        self._mismatch_first_seen = None
+
+        self._write_failed = False
+        self._ignored_baseline = ''
+
+        super().start_recording()
+
+        if not self.recording:
+
+            self._capture_started_at = None
+            return
+
+        self._ignored_baseline = self.last_snapshot
+
+        self._preview_saved = ''
+        self._preview_live = ''
+
+        self._render_preview()
+
+        self._backup_path = (
+            self.output_path + '.autosave.txt'
+        )
+
+        self._backup_warning_shown = False
+
+        self._backup_serial += 1
+
+        # Make an initial backup and then repeat every 60s.
+
+        self._backup_now(
+            self._backup_serial
+        )
+
+    # ---------------------------------------------------------
+    # TXT Writer
+    # Keeps the original text deduplication logic.
+    # ---------------------------------------------------------
+
+    def write_unique_text(
+        self,
+        candidate,
+        first_seen=None
+    ):
+
+        candidate = normalize_text(candidate)
+
+        if not candidate:
+            return
+
+        with self._io_lock:
+
+            if not self.file_handle:
+                return
+
+            history = self.history_text[
+                -RECENT_HISTORY_LIMIT:
+            ]
+
+            if (
+                len(candidate) >= 20
+                and candidate in history
+            ):
+                return
+
+            overlap = self.longest_overlap(
+                history,
+                candidate
+            )
+
+            if overlap >= MIN_EXACT_OVERLAP:
+
+                candidate = candidate[
+                    overlap:
+                ].strip()
+
+            if not candidate:
+                return
+
+            history = self.history_text[
+                -RECENT_HISTORY_LIMIT:
+            ]
+
+            existing_prefix = (
+                self.longest_existing_prefix(
+                    history,
+                    candidate
+                )
+            )
+
+            if existing_prefix >= LONG_REPEAT_MIN:
+
+                candidate = candidate[
+                    existing_prefix:
+                ].strip()
+
+            if not candidate:
+                return
+
+            if (
+                len(candidate) >= 20
+                and candidate in history
+            ):
+                return
+
+            line = candidate
+
+            if (
+                self._timestamps_active
+                and self._capture_started_at is not None
+            ):
+
+                detected = (
+                    first_seen
+                    or self._pending_first_seen
+                    or time.monotonic()
+                )
+
+                time_label = self._format_elapsed(
+                    detected - self._capture_started_at
+                )
+
+                line = f'[{time_label}] {candidate}'
+
+            try:
+
+                self.file_handle.write(
+                    line + '\n'
+                )
+
+                self.file_handle.flush()
+
+                self.history_text = (
+                    self.history_text
+                    + ' '
+                    + candidate
+                )[-RECENT_HISTORY_LIMIT:]
+
+                self._preview_queue.put(
+                    (
+                        self._session_serial,
+                        'line',
+                        line
+                    )
+                )
+
+            except OSError as error:
+
+                self._write_failed = True
+
+                self.message_queue.put(
+                    (
+                        'error',
+                        'Failed to write TXT:\n'
+                        + str(error)
+                    )
+                )
+
+    # ---------------------------------------------------------
+    # Caption Processing and First Detection Time
+    # ---------------------------------------------------------
+
+    def process_snapshot(self, current):
+
+        current = normalize_text(current)
+
+        if not current:
+            return
+
+        now = time.monotonic()
+
+        previous = self.last_snapshot
+
+        if not previous:
+
+            self.last_snapshot = current
+            self._pending_first_seen = now
+
+            self.mismatch_started = None
+            self.mismatch_latest = ''
+
+        elif current == previous:
+
+            self.mismatch_started = None
+            self.mismatch_latest = ''
+
+        elif current.startswith(previous):
+
+            if (
+                self._pending_first_seen is None
+                and len(current) > len(previous)
+            ):
+
+                self._pending_first_seen = now
+
+            self.last_snapshot = current
+
+            self.mismatch_started = None
+            self.mismatch_latest = ''
+
+        elif previous.startswith(current):
+
+            self.last_snapshot = current
+
+            self.mismatch_started = None
+            self.mismatch_latest = ''
+
+        else:
+
+            overlap = self.longest_overlap(
+                previous,
+                current
+            )
+
+            if overlap >= MIN_EXACT_OVERLAP:
+
+                finished = previous[
+                    :-overlap
+                ].strip()
+
+                if finished:
+
+                    self.write_unique_text(
+                        finished,
+                        self._pending_first_seen
+                    )
+
+                self.last_snapshot = current
+                self._pending_first_seen = now
+
+                self.mismatch_started = None
+                self.mismatch_latest = ''
+
+            else:
+
+                fuzzy = self.fuzzy_suffix_prefix(
+                    previous,
+                    current
+                )
+
+                if (
+                    fuzzy is not None
+                    and fuzzy[2] >= FUZZY_THRESHOLD
+                ):
+
+                    if fuzzy[0] > 0:
+
+                        finished = previous[
+                            :fuzzy[0]
+                        ].strip()
+
+                        if finished:
+
+                            self.write_unique_text(
+                                finished,
+                                self._pending_first_seen
+                            )
+
+                    self.last_snapshot = current
+                    self._pending_first_seen = now
+
+                    self.mismatch_started = None
+                    self.mismatch_latest = ''
+
+                elif self.mismatch_started is None:
+
+                    self.mismatch_started = now
+
+                    self._mismatch_first_seen = now
+                    self.mismatch_latest = current
+
+                else:
+
+                    self.mismatch_latest = current
+
+                    if (
+                        now - self.mismatch_started
+                        >= MISMATCH_GRACE
+                    ):
+
+                        self.write_unique_text(
+                            previous,
+                            self._pending_first_seen
+                        )
+
+                        self.last_snapshot = (
+                            self.mismatch_latest
+                        )
+
+                        self._pending_first_seen = (
+                            self._mismatch_first_seen
+                            or now
+                        )
+
+                        self.mismatch_started = None
+                        self.mismatch_latest = ''
+
+                        self._mismatch_first_seen = None
+
+        # Update the preview through the main UI thread.
+
+        if self.recording:
+
+            live = current
+
+            if (
+                self._ignored_baseline
+                and live.startswith(
+                    self._ignored_baseline
+                )
+            ):
+
+                live = live[
+                    len(self._ignored_baseline):
+                ].strip()
+
+            self._preview_queue.put(
+                (
+                    self._session_serial,
+                    'live',
+                    live
+                )
+            )
+
+    # ---------------------------------------------------------
+    # Pause / Continue
+    # ---------------------------------------------------------
+
+    def toggle_pause(self):
+
+        previous = self.paused
+
+        super().toggle_pause()
+
+        if self.paused != previous:
+
+            self._pending_first_seen = None
+            self._mismatch_first_seen = None
+
+            self._preview_queue.put(
+                (
+                    self._session_serial,
+                    'live',
+                    ''
+                )
+            )
+
+            self._render_preview()
+
+    # ---------------------------------------------------------
+    # Stop / Save / Backup Cleanup
+    # ---------------------------------------------------------
+
+    def finish_recording(
+        self,
+        automatic=False,
+        show_message=True
+    ):
+
+        if not self.recording:
+            return
+
+        super().finish_recording(
+            automatic=automatic,
+            show_message=False
+        )
+
+        # Invalidate old automatic backup callbacks.
+
+        self._backup_serial += 1
+
+        self._pending_first_seen = None
+        self._mismatch_first_seen = None
+
+        self._preview_queue.put(
+            (
+                self._session_serial,
+                'live',
+                ''
+            )
+        )
+
+        # Remove the recovery backup only after a normal
+        # finalization with no detected TXT write error.
+
+        if (
+            not self._write_failed
+            and self.file_handle is None
+            and self.output_path
+            and os.path.isfile(self.output_path)
+        ):
+
+            try:
+
+                if (
+                    self._backup_path
+                    and os.path.isfile(
+                        self._backup_path
+                    )
+                ):
+
+                    os.remove(
+                        self._backup_path
+                    )
+
+            except OSError:
+                pass
+
+        if show_message:
+
+            if automatic:
+
+                messagebox.showinfo(
+                    self.t('Recording Stopped'),
+                    self.t(
+                        'Windows Live Captions was closed.'
+                        '\n\n'
+                        'The current recording session was '
+                        'stopped and the TXT file was saved '
+                        'successfully:\n\n'
+                        + str(self.output_path)
+                    )
+                )
+
+            else:
+
+                messagebox.showinfo(
+                    self.t('Saved'),
+                    self.t(
+                        'TXT saved successfully:\n\n'
+                        + str(self.output_path)
+                    )
+                )
+
+
+# -------------------------------------------------------------
+# Application Entry Point
+# -------------------------------------------------------------
+
+
+from collections import deque
+
+
+class LiveCaptionsRecorderV12Fixed(LiveCaptionsRecorderV12):
+
+    SEGMENT_MAX = 105
+    SEGMENT_MIN = 35
+
+    def __init__(self, root):
+
+        self._snapshot_samples = deque(maxlen=2400)
+        self._preview_widget_ready = False
+        self._preview_rendered_length = 0
+
+        super().__init__(root)
+
+    # --------------------------------------------------
+    # Timestamp selector: ○ / ●
+    # --------------------------------------------------
+
+    def build_detail_page(self):
+
+        super().build_detail_page()
+
+        self.timestamp_check.pack_forget()
+
+        self.timestamp_dot_button = ttk.Button(
+            self.extra_options,
+            style='Secondary.TButton',
+            command=self.toggle_timestamp_dot
+        )
+
+        self.timestamp_dot_button.pack(anchor='w')
+
+        self.refresh_timestamp_dot()
+
+    def refresh_timestamp_dot(self):
+
+        if hasattr(self, 'timestamp_dot_button'):
+
+            symbol = '●' if self.timestamps_var.get() else '○'
+
+            self.timestamp_dot_button.configure(
+                text=f'{symbol}  {self.extra(0)}',
+                state='disabled' if self.recording else 'normal'
+            )
+
+    def toggle_timestamp_dot(self):
+
+        if self.recording:
+            return
+
+        self.timestamps_var.set(
+            not self.timestamps_var.get()
+        )
+
+        self.refresh_timestamp_dot()
+
+    def change_language(self, event=None):
+
+        super().change_language(event)
+        self.refresh_timestamp_dot()
+
+    def set_session_controls(self, active):
+
+        super().set_session_controls(active)
+        self.refresh_timestamp_dot()
+
+    def start_recording(self):
+
+        self._snapshot_samples.clear()
+
+        self._preview_widget_ready = False
+        self._preview_rendered_length = 0
+
+        super().start_recording()
+
+    # --------------------------------------------------
+    # Split long captions into readable TXT blocks
+    # --------------------------------------------------
+
+    @staticmethod
+    def split_text_blocks(value):
+
+        text = normalize_text(value)
+
+        while text:
+
+            cut = None
+
+            # Prefer a natural punctuation boundary.
+
+            for match in re.finditer(
+                r'[.!?。！？；;]+(?=\s|$)',
+                text
+            ):
+
+                position = match.end()
+
+                if (
+                    LiveCaptionsRecorderV12Fixed.SEGMENT_MIN
+                    <= position
+                    <= LiveCaptionsRecorderV12Fixed.SEGMENT_MAX
+                ):
+
+                    cut = position
+
+            # If Live Captions supplies no punctuation,
+            # use a readable maximum block length.
+
+            if (
+                cut is None
+                and len(text)
+                > LiveCaptionsRecorderV12Fixed.SEGMENT_MAX
+            ):
+
+                cut = text.rfind(
+                    ' ',
+                    LiveCaptionsRecorderV12Fixed.SEGMENT_MIN,
+                    LiveCaptionsRecorderV12Fixed.SEGMENT_MAX + 1
+                )
+
+                if (
+                    cut
+                    < LiveCaptionsRecorderV12Fixed.SEGMENT_MIN
+                ):
+
+                    cut = (
+                        LiveCaptionsRecorderV12Fixed.SEGMENT_MAX
+                    )
+
+            if cut is None:
+                cut = len(text)
+
+            part = text[:cut].strip()
+
+            if part:
+                yield part
+
+            text = text[cut:].strip()
+
+    # --------------------------------------------------
+    # Preserve the original deduplication approach
+    # --------------------------------------------------
+
+    def _fresh_tail(self, candidate):
+
+        candidate = normalize_text(candidate)
+
+        if not candidate:
+            return ''
+
+        history = self.history_text[
+            -RECENT_HISTORY_LIMIT:
+        ]
+
+        if (
+            len(candidate) >= 20
+            and candidate in history
+        ):
+
+            return ''
+
+        overlap = self.longest_overlap(
+            history,
+            candidate
+        )
+
+        if overlap >= MIN_EXACT_OVERLAP:
+
+            candidate = candidate[overlap:].strip()
+
+        if not candidate:
+            return ''
+
+        prefix = self.longest_existing_prefix(
+            history,
+            candidate
+        )
+
+        if prefix >= LONG_REPEAT_MIN:
+
+            candidate = candidate[prefix:].strip()
+
+        if (
+            len(candidate) >= 20
+            and candidate in history
+        ):
+
+            return ''
+
+        return candidate
+
+    # --------------------------------------------------
+    # Find the first observed time of each TXT block
+    # --------------------------------------------------
+
+    def _first_seen_for(self, piece, fallback=None):
+
+        anchor = piece[:min(20, len(piece))]
+
+        start = self._capture_started_at
+
+        if anchor:
+
+            for stamp, snapshot in self._snapshot_samples:
+
+                if (
+                    (start is None or stamp >= start)
+                    and anchor in snapshot
+                ):
+
+                    return stamp
+
+        if fallback is not None:
+            return fallback
+
+        return time.monotonic()
+
+    def write_unique_text(
+        self,
+        candidate,
+        first_seen=None
+    ):
+
+        # Deduplicate before dividing a long caption.
+        # This helps avoid repeating the old caption window.
+
+        with self._io_lock:
+
+            if not self.file_handle:
+                return
+
+            fresh = self._fresh_tail(candidate)
+
+            if not fresh:
+                return
+
+            for part in self.split_text_blocks(fresh):
+
+                detected_at = self._first_seen_for(
+                    part,
+                    first_seen
+                )
+
+                super().write_unique_text(
+                    part,
+                    first_seen=detected_at
+                )
+
+    # --------------------------------------------------
+    # Collect timestamp observations
+    # --------------------------------------------------
+
+    def process_snapshot(self, current):
+
+        current = normalize_text(current)
+
+        if not current:
+            return
+
+        stamp = time.monotonic()
+
+        if (
+            not self._snapshot_samples
+            or self._snapshot_samples[-1][1] != current
+        ):
+
+            self._snapshot_samples.append(
+                (stamp, current)
+            )
+
+        super().process_snapshot(current)
+
+    # --------------------------------------------------
+    # Separate the unsaved current caption from history
+    # --------------------------------------------------
+
+    def _uncommitted_preview(self, value):
+
+        current = normalize_text(value)
+
+        if not current:
+            return ''
+
+        with self._io_lock:
+
+            history = self.history_text[
+                -RECENT_HISTORY_LIMIT:
+            ]
+
+            if (
+                len(current) >= 20
+                and current in history
+            ):
+
+                return ''
+
+            overlap = self.longest_overlap(
+                history,
+                current
+            )
+
+            if overlap >= MIN_EXACT_OVERLAP:
+
+                return current[overlap:].strip()
+
+            prefix = self.longest_existing_prefix(
+                history,
+                current
+            )
+
+            if prefix >= LONG_REPEAT_MIN:
+
+                return current[prefix:].strip()
+
+        baseline = self._ignored_baseline
+
+        if baseline and current.startswith(baseline):
+
+            return current[len(baseline):].strip()
+
+        return current
+
+    # --------------------------------------------------
+    # Full cumulative preview - NO TIMESTAMPS
+    # --------------------------------------------------
+
+    def _drain_preview_queue(self):
+
+        changed = False
+
+        try:
+
+            while True:
+
+                serial, kind, value = (
+                    self._preview_queue.get_nowait()
+                )
+
+                if serial != self._session_serial:
+                    continue
+
+                if kind == 'line':
+
+                    # Remove TXT timestamps from the preview.
+
+                    plain = re.sub(
+                        r'^\[\d+:\d{2}:\d{2}\]\s*',
+                        '',
+                        value
+                    )
+
+                    # Keep ALL confirmed text.
+                    # Do not truncate at 30,000 characters.
+
+                    self._preview_saved += plain + '\n'
+
+                    changed = True
+
+                elif kind == 'live':
+
+                    next_live = self._uncommitted_preview(
+                        value
+                    )
+
+                    if next_live != self._preview_live:
+
+                        self._preview_live = next_live
+
+                        changed = True
+
+        except queue.Empty:
+            pass
+
+        if changed:
+            self._render_preview()
+
+        self.root.after(
+            100,
+            self._drain_preview_queue
+        )
+
+    # --------------------------------------------------
+    # Efficient preview rendering
+    # --------------------------------------------------
+
+    def _render_preview(self):
+
+        if not self._preview_visible:
+            return
+
+        box = self.preview_text
+
+        at_bottom = (
+            box.yview()[1] >= 0.97
+            or not self._preview_widget_ready
+        )
+
+        top_line = box.index('@0,0')
+
+        box.configure(state='normal')
+
+        if (
+            not self._preview_widget_ready
+            or self._preview_rendered_length
+            > len(self._preview_saved)
+        ):
+
+            box.delete('1.0', 'end')
+
+            box.insert(
+                'end-1c',
+                self._preview_saved
+            )
+
+            self._preview_rendered_length = len(
+                self._preview_saved
+            )
+
+            self._preview_widget_ready = True
+
+        else:
+
+            # Remove only the previous temporary live text.
+            # Previously saved content remains untouched.
+
+            box.delete(
+                'v12_pending',
+                'end-1c'
+            )
+
+            additional = self._preview_saved[
+                self._preview_rendered_length:
+            ]
+
+            if additional:
+
+                box.insert(
+                    'end-1c',
+                    additional
+                )
+
+            self._preview_rendered_length = len(
+                self._preview_saved
+            )
+
+        box.mark_set(
+            'v12_pending',
+            'end-1c'
+        )
+
+        box.mark_gravity(
+            'v12_pending',
+            'left'
+        )
+
+        # Display the current unfinished caption
+        # without any timestamp.
+
+        if (
+            self.recording
+            and not self.paused
+            and self._preview_live
+        ):
+
+            box.insert(
+                'end-1c',
+                self._preview_live
+            )
+
+        box.configure(state='disabled')
+
+        # Follow new text only when the user is already
+        # viewing the bottom of the preview.
+
+        if at_bottom:
+
+            box.see('end')
+
+        else:
+
+            try:
+                box.see(top_line)
+
+            except tk.TclError:
+                pass
+
+
+
+
+# ============================================================
+# v1.2.0 - Optional and Optimized Live Preview
+# ============================================================
+
+class _VisiblePreviewQueue(queue.Queue):
+    """Disable preview event accumulation when preview is hidden."""
+
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+
+    def put(self, item, block=True, timeout=None):
+        if self.app.preview_feature_enabled and self.app._preview_visible:
+            return super().put(item, block=block, timeout=timeout)
+
+
+class LiveCaptionsRecorderV12Lite(LiveCaptionsRecorderV12Fixed):
+
+    PREVIEW_LABELS = {
+        'en': 'Enable Live Preview',
+        'ko': '실시간 미리보기 사용',
+        'zh_CN': '启用实时预览',
+        'zh_TW': '啟用即時預覽',
+        'ja': 'リアルタイムプレビューを有効にする',
+    }
+
+    def __init__(self, root):
+
+        self.preview_feature_enabled = False
+        self._has_recording_started = False
+
+        super().__init__(root)
+
+        # Preview-only messages are discarded while hidden.
+        # The actual TXT writer and automatic backup remain active.
+
+        self._preview_queue = _VisiblePreviewQueue(self)
+
+    # ---------------------------------------------------------
+    # Preview option
+    # ---------------------------------------------------------
+
+    def build_detail_page(self):
+
+        super().build_detail_page()
+
+        # Hide the preview controls by default.
+
+        self.preview_row.pack_forget()
+
+        self.preview_enable_button = ttk.Button(
+            self.extra_options,
+            style='Secondary.TButton',
+            command=self.toggle_preview_feature
+        )
+
+        self.preview_enable_button.pack(
+            anchor='w',
+            pady=(6, 0)
+        )
+
+        self._refresh_preview_option()
+
+    def _refresh_preview_option(self):
+
+        label = self.PREVIEW_LABELS.get(
+            self.language_code,
+            self.PREVIEW_LABELS['en']
+        )
+
+        dot = '●' if self.preview_feature_enabled else '○'
+
+        self.preview_enable_button.configure(
+            text=f'{dot}  {label}'
+        )
+
+    def change_language(self, event=None):
+
+        super().change_language(event)
+
+        self._refresh_preview_option()
+
+    # ---------------------------------------------------------
+    # Clear unused preview data
+    # ---------------------------------------------------------
+
+    def _clear_preview_events(self):
+
+        try:
+            while True:
+                self._preview_queue.get_nowait()
+
+        except queue.Empty:
+            pass
+
+    def _clear_preview_widget(self):
+
+        widget = self.preview_text
+
+        widget.configure(state='normal')
+
+        widget.delete('1.0', 'end')
+
+        widget.mark_set(
+            'preview_pending',
+            'end-1c'
+        )
+
+        widget.mark_gravity(
+            'preview_pending',
+            'left'
+        )
+
+        widget.configure(state='disabled')
+
+        # No duplicate full-history string in memory.
+
+        self._preview_saved = ''
+        self._preview_live = ''
+
+        self._preview_rendered_length = 0
+        self._preview_widget_ready = False
+
+    # ---------------------------------------------------------
+    # Remove timestamps from preview only
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def _without_timestamps(text):
+
+        return re.sub(
+            r'(?m)^\[\d{2,}:\d{2}:\d{2}\][ \t]*',
+            '',
+            text
+        )
+
+    # ---------------------------------------------------------
+    # Load complete history only when preview is opened
+    # ---------------------------------------------------------
+
+    def _load_preview_from_txt(self):
+
+        content = ''
+
+        if self._has_recording_started and self.output_path:
+
+            try:
+
+                with self._io_lock:
+
+                    if (
+                        self.file_handle
+                        and not self.file_handle.closed
+                    ):
+                        self.file_handle.flush()
+
+                    with open(
+                        self.output_path,
+                        'r',
+                        encoding='utf-8-sig'
+                    ) as fp:
+
+                        content = fp.read()
+
+            except OSError as error:
+
+                self.message_queue.put(
+                    (
+                        'error',
+                        'Unable to open TXT preview:\n'
+                        + str(error)
+                    )
+                )
+
+        self._clear_preview_widget()
+
+        content = self._without_timestamps(content)
+
+        widget = self.preview_text
+
+        widget.configure(state='normal')
+
+        if content:
+            widget.insert('end-1c', content)
+
+        widget.mark_set(
+            'preview_pending',
+            'end-1c'
+        )
+
+        widget.mark_gravity(
+            'preview_pending',
+            'left'
+        )
+
+        widget.configure(state='disabled')
+
+        self._preview_live = (
+            self._uncommitted_preview(self.last_snapshot)
+            if self.recording and not self.paused
+            else ''
+        )
+
+    # ---------------------------------------------------------
+    # Efficient incremental preview
+    # ---------------------------------------------------------
+
+    def _append_preview(self, lines='', live=None):
+
+        if not (
+            self.preview_feature_enabled
+            and self._preview_visible
+        ):
+            return
+
+        if live is not None:
+            self._preview_live = live
+
+        widget = self.preview_text
+
+        was_at_bottom = widget.yview()[1] >= 0.97
+
+        old_top = widget.index('@0,0')
+
+        widget.configure(state='normal')
+
+        # Remove only the previous unfinished caption.
+
+        widget.delete(
+            'preview_pending',
+            'end-1c'
+        )
+
+        # Append new confirmed lines.
+        # Old confirmed text is never reconstructed here.
+
+        if lines:
+            widget.insert('end-1c', lines)
+
+        widget.mark_set(
+            'preview_pending',
+            'end-1c'
+        )
+
+        widget.mark_gravity(
+            'preview_pending',
+            'left'
+        )
+
+        # Show current unfinished subtitle separately.
+
+        if (
+            self.recording
+            and not self.paused
+            and self._preview_live
+        ):
+
+            widget.insert(
+                'end-1c',
+                self._preview_live
+            )
+
+        widget.configure(state='disabled')
+
+        # Do not force scrolling if the user is reading old text.
+
+        if was_at_bottom:
+            widget.see('end')
+
+        else:
+            widget.yview(old_top)
+
+    def _render_preview(self):
+
+        self._append_preview(
+            live=self._preview_live
+        )
+
+    # ---------------------------------------------------------
+    # Enable / Disable Live Preview
+    # ---------------------------------------------------------
+
+    def toggle_preview_feature(self):
+
+        if self.preview_feature_enabled:
+
+            # Disable event production first.
+
+            self.preview_feature_enabled = False
+
+            if self._preview_visible:
+
+                LiveCaptionsRecorderV12.toggle_preview(self)
+
+            # Hide both the controls and preview panel.
+
+            self.preview_row.pack_forget()
+
+            self._clear_preview_events()
+            self._clear_preview_widget()
+
+        else:
+
+            self.preview_feature_enabled = True
+
+            # Preview controls exist only after enabling.
+
+            self.preview_row.pack(
+                fill='x',
+                pady=(0, 8),
+                before=self.status_frame
+            )
+
+            # Automatically open on first enabling.
+
+            self.toggle_preview()
+
+        self._refresh_preview_option()
+
+    # ---------------------------------------------------------
+    # Show / Hide Preview
+    # ---------------------------------------------------------
+
+    def toggle_preview(self):
+
+        if not self.preview_feature_enabled:
+            return
+
+        if self._preview_visible:
+
+            # Hide preview and release the displayed history.
+
+            LiveCaptionsRecorderV12.toggle_preview(self)
+
+            self._clear_preview_events()
+            self._clear_preview_widget()
+
+        else:
+
+            # Synchronize history loading with TXT writing.
+            # This prevents missing or duplicating committed lines.
+
+            with self._io_lock:
+
+                self._clear_preview_events()
+
+                self._load_preview_from_txt()
+
+                LiveCaptionsRecorderV12.toggle_preview(self)
+
+            self._render_preview()
+
+            # Newly opened preview starts at the latest caption.
+
+            self.preview_text.see('end')
+
+    # ---------------------------------------------------------
+    # Optimized preview queue
+    # ---------------------------------------------------------
+
+    def _drain_preview_queue(self):
+
+        if (
+            self.preview_feature_enabled
+            and self._preview_visible
+        ):
+
+            committed = []
+            current_live = None
+
+            try:
+
+                while True:
+
+                    serial, kind, value = (
+                        self._preview_queue.get_nowait()
+                    )
+
+                    if serial != self._session_serial:
+                        continue
+
+                    if kind == 'line':
+
+                        committed.append(
+                            self._without_timestamps(value)
+                            + '\n'
+                        )
+
+                    elif kind == 'live':
+
+                        current_live = value
+
+            except queue.Empty:
+                pass
+
+            if current_live is not None:
+
+                current_live = self._uncommitted_preview(
+                    current_live
+                )
+
+            elif committed:
+
+                current_live = (
+                    self._uncommitted_preview(
+                        self.last_snapshot
+                    )
+                    if self.recording and not self.paused
+                    else ''
+                )
+
+            if committed or current_live is not None:
+
+                self._append_preview(
+                    ''.join(committed),
+                    current_live
+                )
+
+        # Check less frequently when preview is not visible.
+
+        interval = (
+            300
+            if self._preview_visible
+            else 1000
+        )
+
+        self.root.after(
+            interval,
+            self._drain_preview_queue
+        )
+
+    # ---------------------------------------------------------
+    # Skip timestamp history when timestamps are disabled
+    # ---------------------------------------------------------
+
+    def process_snapshot(self, current):
+
+        if not self._timestamps_active:
+
+            return LiveCaptionsRecorderV12.process_snapshot(
+                self,
+                current
+            )
+
+        return super().process_snapshot(current)
+
+    # ---------------------------------------------------------
+    # Recording lifecycle
+    # ---------------------------------------------------------
+
+    def start_recording(self):
+
+        was_recording = self.recording
+
+        super().start_recording()
+
+        if not was_recording and self.recording:
+
+            self._has_recording_started = True
+
+            if (
+                self.preview_feature_enabled
+                and self._preview_visible
+            ):
+
+                with self._io_lock:
+
+                    self._clear_preview_events()
+
+                    self._load_preview_from_txt()
+
+                self._render_preview()
+
+    def go_back(self):
+
+        if self.recording:
+            return
+
+        if self.preview_feature_enabled:
+            self.toggle_preview_feature()
+
+        self._has_recording_started = False
+
+        super().go_back()
+
+
+
+# ============================================================
+# v1.2.0 - Duration / Open Folder / Copy All
+# ============================================================
+
+class LiveCaptionsRecorderV12Plus(LiveCaptionsRecorderV12Lite):
+
+    EXTRA_BUTTONS = {
+        'en': ('Open Folder', 'Copy All', 'Copied!', 'Nothing saved yet.'),
+        'ko': ('저장 폴더 열기', '전체 복사', '복사 완료!', '아직 저장된 내용이 없습니다.'),
+        'zh_CN': ('打开保存位置', '复制全部文字', '已复制！', '暂时没有已保存的文字。'),
+        'zh_TW': ('開啟儲存位置', '複製全部文字', '已複製！', '目前沒有已儲存的文字。'),
+        'ja': ('保存先を開く', '全文をコピー', 'コピーしました！', '保存済みの文字はまだありません。'),
+    }
+
+    def __init__(self, root):
+        self._timer_serial = 0
+        self._timer_started = None
+        self._timer_paused_at = None
+        self._timer_pause_total = 0.0
+        self._last_saved_file = None
+        self._copy_serial = 0
+        super().__init__(root)
+
+    def btext(self, index):
+        return self.EXTRA_BUTTONS.get(
+            self.language_code, self.EXTRA_BUTTONS['en']
+        )[index]
+
+    def build_detail_page(self):
+        super().build_detail_page()
+
+        # Keep status on the left; show the timer on the right only
+        # during recording. Display Open Folder after a successful save.
+        self.status_label.pack_forget()
+        self.status_label.pack(side='left', anchor='w')
+
+        self.duration_label = ttk.Label(
+            self.button_frame,
+            text='00:00:00',
+            style='Subtitle.TLabel',
+            font=('Segoe UI', 10, 'bold')
+        )
+
+        self.open_folder_button = ttk.Button(
+            self.status_frame,
+            text=self.btext(0),
+            style='Secondary.TButton',
+            command=self.open_saved_folder
+        )
+
+        # Replace the old preview heading with a compact toolbar.
+        # Its Copy All button is automatically hidden with preview_panel.
+        self.preview_heading.pack_forget()
+        old_content = next(
+            (child for child in self.preview_panel.winfo_children()
+             if child is not self.preview_heading), None
+        )
+        self.preview_toolbar = ttk.Frame(
+            self.preview_panel, style='Card.TFrame'
+        )
+        opts = {'fill': 'x', 'pady': (0, 5)}
+        if old_content is not None:
+            opts['before'] = old_content
+        self.preview_toolbar.pack(**opts)
+        self.preview_toolbar_title = ttk.Label(
+            self.preview_toolbar, text=self.extra(3), style='Body.TLabel'
+        )
+        self.preview_toolbar_title.pack(side='left')
+        self.copy_all_button = ttk.Button(
+            self.preview_toolbar,
+            text=self.btext(1),
+            style='Secondary.TButton',
+            command=self.copy_all_saved_text
+        )
+        self.copy_all_button.pack(side='right')
+
+    def change_language(self, event=None):
+        super().change_language(event)
+        self.preview_toolbar_title.configure(text=self.extra(3))
+        self.open_folder_button.configure(text=self.btext(0))
+        self.copy_all_button.configure(text=self.btext(1))
+        self._copy_serial += 1
+
+    @staticmethod
+    def format_duration(seconds):
+        seconds = max(0, int(seconds))
+        h, remaining = divmod(seconds, 3600)
+        m, s = divmod(remaining, 60)
+        return f'{h:02d}:{m:02d}:{s:02d}'
+
+    def _recorded_seconds(self):
+        if self._timer_started is None:
+            return 0
+        now = (self._timer_paused_at if self._timer_paused_at is not None
+               else time.monotonic())
+        return now - self._timer_started - self._timer_pause_total
+
+    def _update_recording_timer(self, serial):
+        if serial != self._timer_serial or not self.recording:
+            return
+        self.duration_label.configure(
+            text=self.format_duration(self._recorded_seconds())
+        )
+        self.root.after(
+            1000, lambda expected=serial: self._update_recording_timer(expected)
+        )
+
+    def start_recording(self):
+        was_recording = self.recording
+        super().start_recording()
+        if was_recording or not self.recording:
+            return
+        self._last_saved_file = None
+        self.open_folder_button.pack_forget()
+        self._timer_started = time.monotonic()
+        self._timer_paused_at = None
+        self._timer_pause_total = 0.0
+        self._timer_serial += 1
+        self.duration_label.configure(text='00:00:00')
+
+        self.duration_label.grid(
+            row=1,
+            column=0,
+            columnspan=3,
+            sticky='e',
+            pady=(8, 0)
+        )
+
+        self._update_recording_timer(self._timer_serial)
+
+    def toggle_pause(self):
+        old_paused = self.paused
+        super().toggle_pause()
+        if not self.recording or self.paused == old_paused:
+            return
+        now = time.monotonic()
+        if self.paused:
+            self._timer_paused_at = now
+        elif self._timer_paused_at is not None:
+            self._timer_pause_total += now - self._timer_paused_at
+            self._timer_paused_at = None
+        self.duration_label.configure(
+            text=self.format_duration(self._recorded_seconds())
+        )
+
+   
+    def finish_recording(self, automatic=False, show_message=True):
+
+        if not self.recording:
+            return
+
+
+        saved_file = self.output_path
+
+        final_duration = self.format_duration(
+            self._recorded_seconds()
+        )
+
+        self._timer_serial += 1
+
+
+        super().finish_recording(
+            automatic=automatic,
+            show_message=show_message
+        )
+
+        self.duration_label.configure(text=final_duration)
+
+        if (
+            saved_file
+            and os.path.isfile(saved_file)
+            and not self._write_failed
+        ):
+            self._last_saved_file = saved_file
+
+
+
+            # Automatically open the saved TXT location
+            if not automatic and show_message:
+                self.root.after(
+                    150,
+                    self.open_saved_folder
+                )
+
+        else:
+            self._last_saved_file = None
+            self.open_folder_button.pack_forget()
+
+
+    def open_saved_folder(self):
+        path = self._last_saved_file
+        if not path or not os.path.isfile(path):
+            messagebox.showwarning(self.t('Error'),
+                                   self.t('The selected save location does not exist.'))
+            return
+        try:
+            subprocess.Popen(['explorer.exe', '/select,', os.path.normpath(path)])
+        except OSError as error:
+            messagebox.showerror(self.t('Error'), str(error))
+
+    def copy_all_saved_text(self):
+        # Read the authoritative TXT only when Copy All is clicked.
+        # The unfinished caption shown in preview is deliberately excluded.
+        if not (self.preview_feature_enabled and self._preview_visible):
+            return
+        path = self.output_path if self._has_recording_started else None
+        if not path or not os.path.isfile(path):
+            messagebox.showinfo(self.btext(1), self.btext(3))
+            return
+        try:
+            with self._io_lock:
+                if self.file_handle and not self.file_handle.closed:
+                    self.file_handle.flush()
+                with open(path, 'r', encoding='utf-8-sig') as source:
+                    content = source.read()
+            content = self._without_timestamps(content).strip()
+            if not content:
+                messagebox.showinfo(self.btext(1), self.btext(3))
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append(content)
+            self.root.update_idletasks()
+            self._copy_serial += 1
+            serial = self._copy_serial
+            self.copy_all_button.configure(text=self.btext(2))
+            self.root.after(1500, lambda token=serial: self._reset_copy_label(token))
+        except (OSError, tk.TclError) as error:
+            messagebox.showerror(self.t('Error'), str(error))
+
+    def _reset_copy_label(self, serial):
+        if serial == self._copy_serial:
+            self.copy_all_button.configure(text=self.btext(1))
+
+    def go_back(self):
+        if self.recording:
+            return
+        self._last_saved_file = None
+        self.open_folder_button.pack_forget()
+        self.duration_label.grid_remove()
+        super().go_back()
+
+
 if __name__ == '__main__':
     enable_high_dpi_awareness()
     root = tk.Tk()
     configure_tk_dpi(root)
-    app = LiveCaptionsRecorder(root)
+    app = LiveCaptionsRecorderV12Plus(root)
     root.mainloop()
