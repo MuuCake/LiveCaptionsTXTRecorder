@@ -2,6 +2,8 @@ import sys
 sys.coinit_flags = 2
 import os
 import json
+import sqlite3
+import hashlib
 import re
 import time
 import queue
@@ -12,7 +14,7 @@ import webbrowser
 import warnings
 import subprocess
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -4297,9 +4299,5405 @@ class LiveCaptionsRecorderV12Plus(LiveCaptionsRecorderV12Lite):
         super().go_back()
 
 
+# ============================================================
+# v1.3.0 - Transcript History (Stage 1)
+# ============================================================
+
+class LiveCaptionsRecorderV13(LiveCaptionsRecorderV12Plus):
+
+    HISTORY_UI = {
+        'en': {
+            'home_button': 'History',
+            'title': 'Transcript History',
+            'subtitle': 'Recent saved recordings',
+            'file': 'File Name',
+            'date': 'Date',
+            'duration': 'Duration',
+            'mode': 'Mode',
+            'timestamps': 'Timestamps',
+            'open': 'Open',
+            'folder': 'Open Folder',
+            'refresh': 'Refresh',
+            'system': 'System Audio',
+            'microphone': 'Microphone',
+            'yes': 'On',
+            'no': 'Off',
+            'missing': 'The selected TXT file no longer exists.',
+            'no_selection': 'Please select a history item first.',
+            'db_error': 'Unable to update transcript history.\n\n',
+            'count': '{} recordings',
+        },
+
+        'ko': {
+            'home_button': '기록',
+            'title': '자막 기록',
+            'subtitle': '최근 저장된 기록',
+            'file': '파일 이름',
+            'date': '날짜',
+            'duration': '기록 시간',
+            'mode': '모드',
+            'timestamps': '타임스탬프',
+            'open': '열기',
+            'folder': '폴더 열기',
+            'refresh': '새로고침',
+            'system': '시스템 오디오',
+            'microphone': '마이크',
+            'yes': '사용',
+            'no': '사용 안 함',
+            'missing': '선택한 TXT 파일을 찾을 수 없습니다.',
+            'no_selection': '먼저 기록을 선택해 주세요.',
+            'db_error': '자막 기록을 업데이트하지 못했습니다.\n\n',
+            'count': '{}개 기록',
+        },
+
+        'zh_CN': {
+            'home_button': '历史记录',
+            'title': '字幕历史记录',
+            'subtitle': '最近保存的转写记录',
+            'file': '文件名',
+            'date': '日期',
+            'duration': '录制时长',
+            'mode': '模式',
+            'timestamps': '时间戳',
+            'open': '打开',
+            'folder': '打开所在文件夹',
+            'refresh': '刷新',
+            'system': '系统音频',
+            'microphone': '麦克风',
+            'yes': '开启',
+            'no': '关闭',
+            'missing': '所选 TXT 文件已经不存在。',
+            'no_selection': '请先选择一条历史记录。',
+            'db_error': '无法更新字幕历史记录。\n\n',
+            'count': '{} 条记录',
+        },
+
+        'zh_TW': {
+            'home_button': '歷史記錄',
+            'title': '字幕歷史記錄',
+            'subtitle': '最近儲存的轉寫記錄',
+            'file': '檔案名稱',
+            'date': '日期',
+            'duration': '錄製時長',
+            'mode': '模式',
+            'timestamps': '時間戳',
+            'open': '開啟',
+            'folder': '開啟所在資料夾',
+            'refresh': '重新整理',
+            'system': '系統音訊',
+            'microphone': '麥克風',
+            'yes': '開啟',
+            'no': '關閉',
+            'missing': '所選 TXT 檔案已不存在。',
+            'no_selection': '請先選擇一筆歷史記錄。',
+            'db_error': '無法更新字幕歷史記錄。\n\n',
+            'count': '{} 筆記錄',
+        },
+
+        'ja': {
+            'home_button': '履歴',
+            'title': '字幕履歴',
+            'subtitle': '最近保存した記録',
+            'file': 'ファイル名',
+            'date': '日時',
+            'duration': '記録時間',
+            'mode': 'モード',
+            'timestamps': 'タイムスタンプ',
+            'open': '開く',
+            'folder': '保存先を開く',
+            'refresh': '更新',
+            'system': 'システム音声',
+            'microphone': 'マイク',
+            'yes': 'オン',
+            'no': 'オフ',
+            'missing': '選択した TXT ファイルが見つかりません。',
+            'no_selection': '先に履歴を選択してください。',
+            'db_error': '字幕履歴を更新できませんでした。\n\n',
+            'count': '{} 件',
+        },
+    }
+
+    def __init__(self, root):
+
+        appdata = os.environ.get(
+            'APPDATA',
+            os.path.expanduser('~')
+        )
+
+        self._history_folder = os.path.join(
+            appdata,
+            'LiveCaptionsTXTRecorder'
+        )
+
+        self._history_db_path = os.path.join(
+            self._history_folder,
+            'history.db'
+        )
+
+        self._history_paths = {}
+        self._history_session_started_at = None
+
+        super().__init__(root)
+
+        self._init_history_db()
+        self.refresh_history_list()
+
+    def htext(self, key):
+
+        table = self.HISTORY_UI.get(
+            self.language_code,
+            self.HISTORY_UI['en']
+        )
+
+        return table.get(
+            key,
+            self.HISTORY_UI['en'].get(key, key)
+        )
+
+    # ---------------------------------------------------------
+    # UI
+    # ---------------------------------------------------------
+
+    def build_ui(self):
+
+        super().build_ui()
+
+        self.build_history_page()
+
+    def build_home_page(self):
+
+        super().build_home_page()
+
+        self.history_home_button = ttk.Button(
+            self.home_page,
+            text=self.htext('home_button'),
+            style='Secondary.TButton',
+            command=self.show_history_page
+        )
+
+        self.history_home_button.pack(
+            fill='x',
+            pady=(22, 0)
+        )
+
+    def build_history_page(self):
+
+        self.history_page = ttk.Frame(
+            self.main,
+            style='App.TFrame'
+        )
+
+        header = ttk.Frame(
+            self.history_page,
+            style='App.TFrame'
+        )
+
+        header.pack(
+            fill='x',
+            pady=(0, 18)
+        )
+
+        self.history_back_button = ttk.Button(
+            header,
+            text=self.t('Back'),
+            style='Secondary.TButton',
+            command=self.show_home
+        )
+
+        self.history_back_button.pack(
+            side='left',
+            padx=(0, 18)
+        )
+
+        title_area = ttk.Frame(
+            header,
+            style='App.TFrame'
+        )
+
+        title_area.pack(
+            side='left',
+            fill='x',
+            expand=True
+        )
+
+        self.history_title_label = ttk.Label(
+            title_area,
+            text=self.htext('title'),
+            style='Title.TLabel'
+        )
+
+        self.history_title_label.pack(
+            anchor='w'
+        )
+
+        self.history_subtitle_label = ttk.Label(
+            title_area,
+            text=self.htext('subtitle'),
+            style='Subtitle.TLabel'
+        )
+
+        self.history_subtitle_label.pack(
+            anchor='w',
+            pady=(3, 0)
+        )
+
+        self.history_count_var = tk.StringVar(
+            value=''
+        )
+
+        ttk.Label(
+            self.history_page,
+            textvariable=self.history_count_var,
+            style='Hint.TLabel'
+        ).pack(
+            anchor='w',
+            pady=(0, 8)
+        )
+
+        table_card = ttk.Frame(
+            self.history_page,
+            style='Card.TFrame',
+            padding=12
+        )
+
+        table_card.pack(
+            fill='both',
+            expand=True
+        )
+
+        table_card.columnconfigure(
+            0,
+            weight=1
+        )
+
+        table_card.rowconfigure(
+            0,
+            weight=1
+        )
+
+        columns = (
+            'file',
+            'date',
+            'duration',
+            'mode',
+            'timestamps'
+        )
+
+        self.history_tree = ttk.Treeview(
+            table_card,
+            columns=columns,
+            show='headings',
+            height=12,
+            style='History.Treeview',
+            selectmode='extended'
+        )
+
+        for key in columns:
+
+            self.history_tree.heading(
+                key,
+                text=self.htext(key)
+            )
+
+        self.history_tree.column(
+            'file',
+            width=310,
+            minwidth=180,
+            anchor='w'
+        )
+
+        self.history_tree.column(
+            'date',
+            width=155,
+            minwidth=135,
+            anchor='center'
+        )
+
+        self.history_tree.column(
+            'duration',
+            width=100,
+            minwidth=90,
+            anchor='center'
+        )
+
+        self.history_tree.column(
+            'mode',
+            width=125,
+            minwidth=100,
+            anchor='center'
+        )
+
+        self.history_tree.column(
+            'timestamps',
+            width=100,
+            minwidth=85,
+            anchor='center'
+        )
+
+        history_scroll = ttk.Scrollbar(
+            table_card,
+            orient='vertical',
+            command=self.history_tree.yview
+        )
+
+        self.history_tree.configure(
+            yscrollcommand=history_scroll.set
+        )
+
+        self.history_tree.grid(
+            row=0,
+            column=0,
+            sticky='nsew'
+        )
+
+        history_scroll.grid(
+            row=0,
+            column=1,
+            sticky='ns',
+            padx=(8, 0)
+        )
+
+        self.history_tree.bind(
+            '<Double-1>',
+            lambda event:
+            self.open_selected_history()
+        )
+
+        action_bar = ttk.Frame(
+            self.history_page,
+            style='App.TFrame'
+        )
+
+        action_bar.pack(
+            fill='x',
+            pady=(14, 0)
+        )
+
+        self.history_open_button = ttk.Button(
+            action_bar,
+            text=self.htext('open'),
+            style='Primary.TButton',
+            command=self.open_selected_history
+        )
+
+        self.history_open_button.pack(
+            side='left'
+        )
+
+        self.history_folder_button = ttk.Button(
+            action_bar,
+            text=self.htext('folder'),
+            style='Secondary.TButton',
+            command=self.open_selected_history_folder
+        )
+
+        self.history_folder_button.pack(
+            side='left',
+            padx=(10, 0)
+        )
+
+        self.history_refresh_button = ttk.Button(
+            action_bar,
+            text=self.htext('refresh'),
+            style='Secondary.TButton',
+            command=self.refresh_history_list
+        )
+
+        self.history_refresh_button.pack(
+            side='right'
+        )
+
+    def show_home(self):
+
+        if hasattr(
+            self,
+            'history_page'
+        ):
+            self.history_page.pack_forget()
+
+        super().show_home()
+
+    def show_history_page(self):
+
+        if self.recording:
+            return
+
+        self.home_page.pack_forget()
+        self.detail_page.pack_forget()
+
+        self.refresh_history_list()
+
+        self.history_page.pack(
+            fill='both',
+            expand=True
+        )
+
+        self.main_canvas.yview_moveto(0)
+
+    # ---------------------------------------------------------
+    # Language
+    # ---------------------------------------------------------
+
+    def change_language(
+        self,
+        event=None
+    ):
+
+        super().change_language(event)
+
+        if not hasattr(
+            self,
+            'history_home_button'
+        ):
+            return
+
+        self.history_home_button.configure(
+            text=self.htext('home_button')
+        )
+
+        self.history_title_label.configure(
+            text=self.htext('title')
+        )
+
+        self.history_subtitle_label.configure(
+            text=self.htext('subtitle')
+        )
+
+        self.history_back_button.configure(
+            text=self.t('Back')
+        )
+
+        self.history_open_button.configure(
+            text=self.htext('open')
+        )
+
+        self.history_folder_button.configure(
+            text=self.htext('folder')
+        )
+
+        self.history_refresh_button.configure(
+            text=self.htext('refresh')
+        )
+
+        for key in (
+            'file',
+            'date',
+            'duration',
+            'mode',
+            'timestamps'
+        ):
+
+            self.history_tree.heading(
+                key,
+                text=self.htext(key)
+            )
+
+        self.refresh_history_list()
+
+    # ---------------------------------------------------------
+    # Dark / Light Mode
+    # ---------------------------------------------------------
+
+    def apply_system_theme(
+        self,
+        force=False
+    ):
+
+        super().apply_system_theme(
+            force=force
+        )
+
+        if not hasattr(
+            self,
+            'history_tree'
+        ):
+            return
+
+        colors = self.colors
+
+        self.style.configure(
+            'History.Treeview',
+            background=colors['card'],
+            fieldbackground=colors['card'],
+            foreground=colors['text'],
+            bordercolor=colors['border'],
+            rowheight=30
+        )
+
+        self.style.configure(
+            'History.Treeview.Heading',
+            background=colors['button'],
+            foreground=colors['text']
+        )
+
+        self.style.map(
+            'History.Treeview',
+            background=[
+                (
+                    'selected',
+                    colors['accent']
+                )
+            ],
+            foreground=[
+                (
+                    'selected',
+                    '#ffffff'
+                )
+            ]
+        )
+
+    # ---------------------------------------------------------
+    # SQLite Database
+    # ---------------------------------------------------------
+
+    def _history_connection(self):
+
+        os.makedirs(
+            self._history_folder,
+            exist_ok=True
+        )
+
+        return sqlite3.connect(
+            self._history_db_path
+        )
+
+    def _init_history_db(self):
+
+        try:
+
+            with self._history_connection() as connection:
+
+                connection.execute(
+                    '''
+                    CREATE TABLE IF NOT EXISTS recordings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        filename TEXT NOT NULL,
+                        filepath TEXT NOT NULL UNIQUE,
+                        created_at TEXT NOT NULL,
+                        duration_seconds INTEGER NOT NULL DEFAULT 0,
+                        mode TEXT NOT NULL,
+                        timestamps INTEGER NOT NULL DEFAULT 0
+                    )
+                    '''
+                )
+
+        except sqlite3.Error as error:
+
+            messagebox.showerror(
+                self.t('Error'),
+                self.htext('db_error')
+                + str(error)
+            )
+
+    def _save_history_record(
+        self,
+        filepath,
+        created_at,
+        duration_seconds,
+        mode,
+        timestamps
+    ):
+
+        if not filepath:
+            return
+
+        filepath = os.path.abspath(
+            filepath
+        )
+
+        filename = os.path.basename(
+            filepath
+        )
+
+        try:
+
+            with self._history_connection() as connection:
+
+                connection.execute(
+                    '''
+                    INSERT INTO recordings (
+                        filename,
+                        filepath,
+                        created_at,
+                        duration_seconds,
+                        mode,
+                        timestamps
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+
+                    ON CONFLICT(filepath)
+                    DO UPDATE SET
+                        filename =
+                            excluded.filename,
+                        created_at =
+                            excluded.created_at,
+                        duration_seconds =
+                            excluded.duration_seconds,
+                        mode =
+                            excluded.mode,
+                        timestamps =
+                            excluded.timestamps
+                    ''',
+                    (
+                        filename,
+                        filepath,
+                        created_at,
+                        int(
+                            max(
+                                0,
+                                duration_seconds
+                            )
+                        ),
+                        mode,
+                        1 if timestamps else 0
+                    )
+                )
+
+        except sqlite3.Error as error:
+
+            messagebox.showerror(
+                self.t('Error'),
+                self.htext('db_error')
+                + str(error)
+            )
+
+    # ---------------------------------------------------------
+    # History List
+    # ---------------------------------------------------------
+
+    def refresh_history_list(self):
+
+        if not hasattr(
+            self,
+            'history_tree'
+        ):
+            return
+
+        for item in (
+            self.history_tree.get_children()
+        ):
+
+            self.history_tree.delete(
+                item
+            )
+
+        self._history_paths.clear()
+
+        rows = []
+
+        if not os.path.isfile(
+            self._history_db_path
+        ):
+
+            self.history_count_var.set(
+                self.htext('count').format(0)
+            )
+
+            return
+
+        try:
+
+            with self._history_connection() as connection:
+
+                rows = connection.execute(
+                    '''
+                    SELECT
+                        id,
+                        filename,
+                        filepath,
+                        created_at,
+                        duration_seconds,
+                        mode,
+                        timestamps
+                    FROM recordings
+                    ORDER BY
+                        created_at DESC,
+                        id DESC
+                    '''
+                ).fetchall()
+
+        except sqlite3.Error as error:
+
+            messagebox.showerror(
+                self.t('Error'),
+                self.htext('db_error')
+                + str(error)
+            )
+
+            return
+
+        for (
+            record_id,
+            filename,
+            filepath,
+            created_at,
+            duration_seconds,
+            mode,
+            timestamps
+        ) in rows:
+
+            iid = str(
+                record_id
+            )
+
+            self._history_paths[
+                iid
+            ] = filepath
+
+            if mode == MODE_MICROPHONE:
+
+                mode_text = self.htext(
+                    'microphone'
+                )
+
+            else:
+
+                mode_text = self.htext(
+                    'system'
+                )
+
+            if timestamps:
+
+                timestamp_text = self.htext(
+                    'yes'
+                )
+
+            else:
+
+                timestamp_text = self.htext(
+                    'no'
+                )
+
+            self.history_tree.insert(
+                '',
+                'end',
+                iid=iid,
+                values=(
+                    filename,
+                    created_at,
+                    self.format_duration(
+                        duration_seconds
+                    ),
+                    mode_text,
+                    timestamp_text
+                )
+            )
+
+        self.history_count_var.set(
+            self.htext(
+                'count'
+            ).format(
+                len(rows)
+            )
+        )
+
+    # ---------------------------------------------------------
+    # Open History
+    # ---------------------------------------------------------
+
+    def _selected_history_path(self):
+
+        selection = (
+            self.history_tree.selection()
+        )
+
+        if not selection:
+
+            messagebox.showinfo(
+                self.htext('title'),
+                self.htext(
+                    'no_selection'
+                )
+            )
+
+            return None
+
+        return self._history_paths.get(
+            selection[0]
+        )
+
+    def open_selected_history(self):
+
+        path = (
+            self._selected_history_path()
+        )
+
+        if not path:
+            return
+
+        if not os.path.isfile(path):
+
+            messagebox.showwarning(
+                self.t('Error'),
+                self.htext('missing')
+            )
+
+            return
+
+        try:
+
+            os.startfile(path)
+
+        except OSError as error:
+
+            messagebox.showerror(
+                self.t('Error'),
+                str(error)
+            )
+
+    def open_selected_history_folder(self):
+
+        path = (
+            self._selected_history_path()
+        )
+
+        if not path:
+            return
+
+        if not os.path.isfile(path):
+
+            messagebox.showwarning(
+                self.t('Error'),
+                self.htext('missing')
+            )
+
+            return
+
+        try:
+
+            subprocess.Popen(
+                [
+                    'explorer.exe',
+                    '/select,',
+                    os.path.normpath(
+                        path
+                    )
+                ]
+            )
+
+        except OSError as error:
+
+            messagebox.showerror(
+                self.t('Error'),
+                str(error)
+            )
+
+    # ---------------------------------------------------------
+    # Recording -> History
+    # ---------------------------------------------------------
+
+    def start_recording(self):
+
+        was_recording = self.recording
+
+        super().start_recording()
+
+        if (
+            not was_recording
+            and self.recording
+        ):
+
+            self._history_session_started_at = (
+                datetime.now()
+            )
+
+    def finish_recording(
+        self,
+        automatic=False,
+        show_message=True
+    ):
+
+        if not self.recording:
+            return
+
+        saved_file = self.output_path
+
+        duration_seconds = int(
+            max(
+                0,
+                self._recorded_seconds()
+            )
+        )
+
+        mode = (
+            self.current_mode
+            or MODE_SYSTEM
+        )
+
+        timestamps = bool(
+            getattr(
+                self,
+                '_timestamps_active',
+                False
+            )
+        )
+
+        started_at = (
+            self._history_session_started_at
+            or datetime.now()
+        )
+
+        created_at = (
+            started_at.strftime(
+                '%Y-%m-%d %H:%M:%S'
+            )
+        )
+
+        super().finish_recording(
+            automatic=automatic,
+            show_message=show_message
+        )
+
+        if (
+            saved_file
+            and os.path.isfile(
+                saved_file
+            )
+            and not self._write_failed
+        ):
+
+            self._save_history_record(
+                saved_file,
+                created_at,
+                duration_seconds,
+                mode,
+                timestamps
+            )
+
+            self.refresh_history_list()
+
+        self._history_session_started_at = None
+
+
+# ============================================================
+# v1.3.0 - Transcript Manager (Stage 2)
+# Search / Filter / Sort / Rename / Delete
+# ============================================================
+
+class LiveCaptionsRecorderV13Manager(
+    LiveCaptionsRecorderV13
+):
+
+    MANAGER_UI = {
+
+        'en': {
+            'search': 'Search file name or transcript...',
+            'date': 'Date',
+            'sort': 'Sort',
+            'all': 'All',
+            'today': 'Today',
+            '7days': 'Last 7 days',
+            '30days': 'Last 30 days',
+            'newest': 'Newest first',
+            'oldest': 'Oldest first',
+            'rename': 'Rename',
+            'delete': 'Delete',
+            'rename_title': 'Rename Transcript',
+            'new_name': 'New file name:',
+            'delete_title': 'Delete Transcript',
+            'delete_confirm':
+                'Delete this TXT file and remove it from history?',
+            'rename_exists':
+                'A file with this name already exists.',
+            'rename_invalid':
+                'The file name contains invalid characters.',
+            'rename_empty':
+                'Please enter a file name.',
+            'missing_remove':
+                'The TXT file no longer exists.\n\n'
+                'Remove this item from history?',
+        },
+
+        'ko': {
+            'search': '파일 이름 또는 자막 내용 검색...',
+            'date': '날짜',
+            'sort': '정렬',
+            'all': '전체',
+            'today': '오늘',
+            '7days': '최근 7일',
+            '30days': '최근 30일',
+            'newest': '최신순',
+            'oldest': '오래된순',
+            'rename': '이름 변경',
+            'delete': '삭제',
+            'rename_title': '기록 이름 변경',
+            'new_name': '새 파일 이름:',
+            'delete_title': '기록 삭제',
+            'delete_confirm':
+                'TXT 파일과 기록을 함께 삭제하시겠습니까?',
+            'rename_exists':
+                '같은 이름의 파일이 이미 존재합니다.',
+            'rename_invalid':
+                '파일 이름에 사용할 수 없는 문자가 있습니다.',
+            'rename_empty':
+                '파일 이름을 입력해 주세요.',
+            'missing_remove':
+                'TXT 파일이 더 이상 존재하지 않습니다.\n\n'
+                '기록에서 제거할까요?',
+        },
+
+        'zh_CN': {
+            'search': '搜索文件名或字幕正文...',
+            'date': '日期',
+            'sort': '排序',
+            'all': '全部',
+            'today': '今天',
+            '7days': '最近 7 天',
+            '30days': '最近 30 天',
+            'newest': '最新优先',
+            'oldest': '最旧优先',
+            'rename': '重命名',
+            'delete': '删除',
+            'rename_title': '重命名记录',
+            'new_name': '新的文件名：',
+            'delete_title': '删除记录',
+            'delete_confirm':
+                '确定删除这个 TXT 文件，并从历史记录中移除吗？',
+            'rename_exists':
+                '已经存在同名文件。',
+            'rename_invalid':
+                '文件名包含不能使用的字符。',
+            'rename_empty':
+                '请输入文件名。',
+            'missing_remove':
+                '这个 TXT 文件已经不存在。\n\n'
+                '是否从历史记录中移除？',
+        },
+
+        'zh_TW': {
+            'search': '搜尋檔案名稱或字幕正文...',
+            'date': '日期',
+            'sort': '排序',
+            'all': '全部',
+            'today': '今天',
+            '7days': '最近 7 天',
+            '30days': '最近 30 天',
+            'newest': '最新優先',
+            'oldest': '最舊優先',
+            'rename': '重新命名',
+            'delete': '刪除',
+            'rename_title': '重新命名記錄',
+            'new_name': '新的檔案名稱：',
+            'delete_title': '刪除記錄',
+            'delete_confirm':
+                '確定刪除這個 TXT 檔案，並從歷史記錄中移除嗎？',
+            'rename_exists':
+                '已經存在同名檔案。',
+            'rename_invalid':
+                '檔案名稱包含不能使用的字元。',
+            'rename_empty':
+                '請輸入檔案名稱。',
+            'missing_remove':
+                '這個 TXT 檔案已不存在。\n\n'
+                '是否從歷史記錄中移除？',
+        },
+
+        'ja': {
+            'search': 'ファイル名または字幕本文を検索...',
+            'date': '日付',
+            'sort': '並び順',
+            'all': 'すべて',
+            'today': '今日',
+            '7days': '過去7日',
+            '30days': '過去30日',
+            'newest': '新しい順',
+            'oldest': '古い順',
+            'rename': '名前を変更',
+            'delete': '削除',
+            'rename_title': '記録名を変更',
+            'new_name': '新しいファイル名：',
+            'delete_title': '記録を削除',
+            'delete_confirm':
+                'TXT ファイルと履歴を削除しますか？',
+            'rename_exists':
+                '同じ名前のファイルが既に存在します。',
+            'rename_invalid':
+                '使用できない文字が含まれています。',
+            'rename_empty':
+                'ファイル名を入力してください。',
+            'missing_remove':
+                'TXT ファイルが見つかりません。\n\n'
+                '履歴から削除しますか？',
+        },
+    }
+
+    def mtext(self, key):
+
+        table = self.MANAGER_UI.get(
+            self.language_code,
+            self.MANAGER_UI['en']
+        )
+
+        return table.get(
+            key,
+            self.MANAGER_UI['en'].get(
+                key,
+                key
+            )
+        )
+
+    # ---------------------------------------------------------
+    # History Page
+    # ---------------------------------------------------------
+
+    def build_history_page(self):
+
+        self.history_page = ttk.Frame(
+            self.main,
+            style='App.TFrame'
+        )
+
+        # ---------------- Header ----------------
+
+        header = ttk.Frame(
+            self.history_page,
+            style='App.TFrame'
+        )
+
+        header.pack(
+            fill='x',
+            pady=(0, 18)
+        )
+
+        self.history_back_button = ttk.Button(
+            header,
+            text=self.t('Back'),
+            style='Secondary.TButton',
+            command=self.show_home
+        )
+
+        self.history_back_button.pack(
+            side='left',
+            padx=(0, 18)
+        )
+
+        title_area = ttk.Frame(
+            header,
+            style='App.TFrame'
+        )
+
+        title_area.pack(
+            side='left',
+            fill='x',
+            expand=True
+        )
+
+        self.history_title_label = ttk.Label(
+            title_area,
+            text=self.htext('title'),
+            style='Title.TLabel'
+        )
+
+        self.history_title_label.pack(
+            anchor='w'
+        )
+
+        self.history_subtitle_label = ttk.Label(
+            title_area,
+            text=self.htext('subtitle'),
+            style='Subtitle.TLabel'
+        )
+
+        self.history_subtitle_label.pack(
+            anchor='w',
+            pady=(3, 0)
+        )
+
+        # ---------------- Search ----------------
+
+        search_card = ttk.Frame(
+            self.history_page,
+            style='Card.TFrame',
+            padding=(14, 12)
+        )
+
+        search_card.pack(
+            fill='x',
+            pady=(0, 12)
+        )
+
+        search_card.columnconfigure(
+            0,
+            weight=1
+        )
+
+        self.history_search_var = tk.StringVar()
+
+        self.history_search_entry = ttk.Entry(
+            search_card,
+            textvariable=self.history_search_var,
+            style='Modern.TEntry'
+        )
+
+        self.history_search_entry.grid(
+            row=0,
+            column=0,
+            sticky='ew',
+            padx=(0, 12)
+        )
+
+        self.history_search_entry.insert(
+            0,
+            ''
+        )
+
+        self.history_date_var = tk.StringVar()
+
+        self.history_date_combo = ttk.Combobox(
+            search_card,
+            textvariable=self.history_date_var,
+            state='readonly',
+            width=15
+        )
+
+        self.history_date_combo.grid(
+            row=0,
+            column=1,
+            padx=(0, 10)
+        )
+
+        self.history_sort_var = tk.StringVar()
+
+        self.history_sort_combo = ttk.Combobox(
+            search_card,
+            textvariable=self.history_sort_var,
+            state='readonly',
+            width=15
+        )
+
+        self.history_sort_combo.grid(
+            row=0,
+            column=2
+        )
+
+        self._refresh_manager_comboboxes()
+
+        self.history_search_var.trace_add(
+            'write',
+            self._history_filter_changed
+        )
+
+        self.history_date_combo.bind(
+            '<<ComboboxSelected>>',
+            lambda event:
+            self.refresh_history_list()
+        )
+
+        self.history_sort_combo.bind(
+            '<<ComboboxSelected>>',
+            lambda event:
+            self.refresh_history_list()
+        )
+
+        # ---------------- Count ----------------
+
+        self.history_count_var = tk.StringVar(
+            value=''
+        )
+
+        ttk.Label(
+            self.history_page,
+            textvariable=self.history_count_var,
+            style='Hint.TLabel'
+        ).pack(
+            anchor='w',
+            pady=(0, 8)
+        )
+
+        # ---------------- Table ----------------
+
+        table_card = ttk.Frame(
+            self.history_page,
+            style='Card.TFrame',
+            padding=12
+        )
+
+        table_card.pack(
+            fill='both',
+            expand=True
+        )
+
+        table_card.columnconfigure(
+            0,
+            weight=1
+        )
+
+        table_card.rowconfigure(
+            0,
+            weight=1
+        )
+
+        columns = (
+            'file',
+            'date',
+            'duration',
+            'mode',
+            'timestamps'
+        )
+
+        self.history_tree = ttk.Treeview(
+            table_card,
+            columns=columns,
+            show='headings',
+            height=12,
+            style='History.Treeview',
+            selectmode='extended'
+        )
+
+        for key in columns:
+
+            self.history_tree.heading(
+                key,
+                text=self.htext(key)
+            )
+
+        self.history_tree.column(
+            'file',
+            width=300,
+            minwidth=180,
+            anchor='w'
+        )
+
+        self.history_tree.column(
+            'date',
+            width=150,
+            minwidth=130,
+            anchor='center'
+        )
+
+        self.history_tree.column(
+            'duration',
+            width=95,
+            minwidth=85,
+            anchor='center'
+        )
+
+        self.history_tree.column(
+            'mode',
+            width=120,
+            minwidth=95,
+            anchor='center'
+        )
+
+        self.history_tree.column(
+            'timestamps',
+            width=90,
+            minwidth=75,
+            anchor='center'
+        )
+
+        history_scroll = ttk.Scrollbar(
+            table_card,
+            orient='vertical',
+            command=self.history_tree.yview
+        )
+
+        self.history_tree.configure(
+            yscrollcommand=history_scroll.set
+        )
+
+        self.history_tree.grid(
+            row=0,
+            column=0,
+            sticky='nsew'
+        )
+
+        history_scroll.grid(
+            row=0,
+            column=1,
+            sticky='ns',
+            padx=(8, 0)
+        )
+
+        self.history_tree.bind(
+            '<Double-1>',
+            lambda event:
+            self.open_selected_history()
+        )
+
+        self._history_box_active = False
+        self._history_box_start = None
+        self._history_box_window = None
+
+        self.history_tree.bind(
+            '<ButtonPress-1>',
+            self._history_box_press,
+            add='+'
+        )
+
+        self.history_tree.bind(
+            '<B1-Motion>',
+            self._history_box_motion,
+            add='+'
+        )
+
+        self.history_tree.bind(
+            '<ButtonRelease-1>',
+            self._history_box_release,
+            add='+'
+        )
+        # ---------------- Buttons ----------------
+
+        action_bar = ttk.Frame(
+            self.history_page,
+            style='App.TFrame'
+        )
+
+        action_bar.pack(
+            fill='x',
+            pady=(14, 0)
+        )
+
+        self.history_open_button = ttk.Button(
+            action_bar,
+            text=self.htext('open'),
+            style='Primary.TButton',
+            command=self.open_selected_history
+        )
+
+        self.history_open_button.pack(
+            side='left'
+        )
+
+        self.history_folder_button = ttk.Button(
+            action_bar,
+            text=self.htext('folder'),
+            style='Secondary.TButton',
+            command=self.open_selected_history_folder
+        )
+
+        self.history_folder_button.pack(
+            side='left',
+            padx=(8, 0)
+        )
+
+        self.history_rename_button = ttk.Button(
+            action_bar,
+            text=self.mtext('rename'),
+            style='Secondary.TButton',
+            command=self.rename_selected_history
+        )
+
+        self.history_rename_button.pack(
+            side='left',
+            padx=(8, 0)
+        )
+
+        self.history_delete_button = ttk.Button(
+            action_bar,
+            text=self.mtext('delete'),
+            style='Secondary.TButton',
+            command=self.delete_selected_history
+        )
+
+        self.history_delete_button.pack(
+            side='left',
+            padx=(8, 0)
+        )
+
+        self.history_refresh_button = ttk.Button(
+            action_bar,
+            text=self.htext('refresh'),
+            style='Secondary.TButton',
+            command=self.refresh_history_list
+        )
+
+        self.history_refresh_button.pack(
+            side='right'
+        )
+
+    # ---------------------------------------------------------
+    # Combo boxes
+    # ---------------------------------------------------------
+
+    def _refresh_manager_comboboxes(self):
+
+        old_date = getattr(
+            self,
+            '_date_filter_key',
+            'all'
+        )
+
+        old_sort = getattr(
+            self,
+            '_sort_key',
+            'newest'
+        )
+
+        self._date_filter_values = {
+            self.mtext('all'): 'all',
+            self.mtext('today'): 'today',
+            self.mtext('7days'): '7days',
+            self.mtext('30days'): '30days'
+        }
+
+        self._sort_values = {
+            self.mtext('newest'): 'newest',
+            self.mtext('oldest'): 'oldest'
+        }
+
+        self.history_date_combo.configure(
+            values=list(
+                self._date_filter_values.keys()
+            )
+        )
+
+        self.history_sort_combo.configure(
+            values=list(
+                self._sort_values.keys()
+            )
+        )
+
+        date_display = next(
+            (
+                text
+                for text, key
+                in self._date_filter_values.items()
+                if key == old_date
+            ),
+            self.mtext('all')
+        )
+
+        sort_display = next(
+            (
+                text
+                for text, key
+                in self._sort_values.items()
+                if key == old_sort
+            ),
+            self.mtext('newest')
+        )
+
+        self.history_date_var.set(
+            date_display
+        )
+
+        self.history_sort_var.set(
+            sort_display
+        )
+
+    def _history_filter_changed(
+        self,
+        *args
+    ):
+
+        if hasattr(
+            self,
+            '_history_search_after'
+        ):
+
+            try:
+
+                self.root.after_cancel(
+                    self._history_search_after
+                )
+
+            except tk.TclError:
+                pass
+
+        self._history_search_after = (
+            self.root.after(
+                250,
+                self.refresh_history_list
+            )
+        )
+
+    # ---------------------------------------------------------
+    # Read TXT for search
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def _history_read_text(path):
+
+        if not path or not os.path.isfile(path):
+            return ''
+
+        try:
+
+            with open(
+                path,
+                'r',
+                encoding='utf-8-sig',
+                errors='ignore'
+            ) as source:
+
+                return source.read()
+
+        except OSError:
+
+            return ''
+
+    # ---------------------------------------------------------
+    # Refresh / Search / Filter / Sort
+    # ---------------------------------------------------------
+
+    def refresh_history_list(self):
+
+        if not hasattr(
+            self,
+            'history_tree'
+        ):
+            return
+
+        for item in self.history_tree.get_children():
+
+            self.history_tree.delete(
+                item
+            )
+
+        self._history_paths.clear()
+
+        query = ''
+
+        if hasattr(
+            self,
+            'history_search_var'
+        ):
+
+            query = (
+                self.history_search_var
+                .get()
+                .strip()
+                .casefold()
+            )
+
+        date_key = 'all'
+
+        if hasattr(
+            self,
+            '_date_filter_values'
+        ):
+
+            date_key = (
+                self._date_filter_values.get(
+                    self.history_date_var.get(),
+                    'all'
+                )
+            )
+
+        self._date_filter_key = date_key
+
+        sort_key = 'newest'
+
+        if hasattr(
+            self,
+            '_sort_values'
+        ):
+
+            sort_key = (
+                self._sort_values.get(
+                    self.history_sort_var.get(),
+                    'newest'
+                )
+            )
+
+        self._sort_key = sort_key
+
+        if not os.path.isfile(
+            self._history_db_path
+        ):
+
+            self.history_count_var.set(
+                self.htext('count').format(0)
+            )
+
+            return
+
+        try:
+
+            with self._history_connection() as connection:
+
+                rows = connection.execute(
+                    '''
+                    SELECT
+                        id,
+                        filename,
+                        filepath,
+                        created_at,
+                        duration_seconds,
+                        mode,
+                        timestamps
+                    FROM recordings
+                    '''
+                ).fetchall()
+
+        except sqlite3.Error as error:
+
+            messagebox.showerror(
+                self.t('Error'),
+                self.htext('db_error')
+                + str(error)
+            )
+
+            return
+
+        now = datetime.now()
+
+        filtered = []
+
+        for row in rows:
+
+            (
+                record_id,
+                filename,
+                filepath,
+                created_at,
+                duration_seconds,
+                mode,
+                timestamps
+            ) = row
+
+            try:
+
+                created_dt = datetime.strptime(
+                    created_at,
+                    '%Y-%m-%d %H:%M:%S'
+                )
+
+            except ValueError:
+
+                created_dt = datetime.min
+
+            # Date filter
+
+            if date_key == 'today':
+
+                if created_dt.date() != now.date():
+                    continue
+
+            elif date_key == '7days':
+
+                if created_dt < (
+                    now - timedelta(days=7)
+                ):
+                    continue
+
+            elif date_key == '30days':
+
+                if created_dt < (
+                    now - timedelta(days=30)
+                ):
+                    continue
+
+            # Search file name + TXT body
+
+            if query:
+
+                filename_match = (
+                    query in filename.casefold()
+                )
+
+                body_match = False
+
+                if not filename_match:
+
+                    body = self._history_read_text(
+                        filepath
+                    )
+
+                    body_match = (
+                        query in body.casefold()
+                    )
+
+                if not (
+                    filename_match
+                    or body_match
+                ):
+                    continue
+
+            filtered.append(
+                (
+                    record_id,
+                    filename,
+                    filepath,
+                    created_at,
+                    duration_seconds,
+                    mode,
+                    timestamps,
+                    created_dt
+                )
+            )
+
+        filtered.sort(
+            key=lambda row: row[7],
+            reverse=(
+                sort_key == 'newest'
+            )
+        )
+
+        for row in filtered:
+
+            (
+                record_id,
+                filename,
+                filepath,
+                created_at,
+                duration_seconds,
+                mode,
+                timestamps,
+                created_dt
+            ) = row
+
+            iid = str(
+                record_id
+            )
+
+            self._history_paths[
+                iid
+            ] = filepath
+
+            if mode == MODE_MICROPHONE:
+
+                mode_text = self.htext(
+                    'microphone'
+                )
+
+            else:
+
+                mode_text = self.htext(
+                    'system'
+                )
+
+            timestamp_text = (
+                self.htext('yes')
+                if timestamps
+                else self.htext('no')
+            )
+
+            display_filename = filename
+
+            if not os.path.isfile(
+                filepath
+            ):
+
+                display_filename += '  [Missing]'
+
+            self.history_tree.insert(
+                '',
+                'end',
+                iid=iid,
+                values=(
+                    display_filename,
+                    created_at,
+                    self.format_duration(
+                        duration_seconds
+                    ),
+                    mode_text,
+                    timestamp_text
+                )
+            )
+
+        self.history_count_var.set(
+            self.htext(
+                'count'
+            ).format(
+                len(filtered)
+            )
+        )
+
+    # ---------------------------------------------------------
+    # Windows-style selection box
+    # ---------------------------------------------------------
+
+    def _history_box_press(self, event):
+
+        # Ctrl / Shift 继续使用 Treeview 原生多选
+        if event.state & 0x0005:
+            self._history_box_active = False
+            return
+
+        region = self.history_tree.identify_region(
+            event.x,
+            event.y
+        )
+
+        # 表头不能开始框选
+        if region == 'heading':
+            self._history_box_active = False
+            return
+
+        row = self.history_tree.identify_row(
+            event.y
+        )
+
+        # 点在已有记录上时，保持普通点击行为
+        if row:
+            self._history_box_active = False
+            return
+
+        # 只有从空白区域开始拖动，才启动框选
+        self._history_box_active = True
+
+        self._history_box_start = (
+            event.x_root,
+            event.y_root
+        )
+
+        self._destroy_history_box()
+
+        current = self.history_tree.selection()
+
+        if current:
+            self.history_tree.selection_remove(
+                *current
+            )
+
+        return 'break'
+
+
+    def _create_history_box(self):
+
+        if self._history_box_window is not None:
+            return
+
+        accent = self.colors.get(
+            'accent',
+            '#0f6cbd'
+        )
+
+        border = self.colors.get(
+            'accent_hover',
+            '#115ea3'
+        )
+
+        box = tk.Toplevel(
+            self.root
+        )
+
+        box.overrideredirect(
+            True
+        )
+
+        try:
+            box.attributes(
+                '-topmost',
+                True
+            )
+        except tk.TclError:
+            pass
+
+        box.configure(
+            bg=accent
+        )
+
+        # 半透明蓝色选择框
+        try:
+            box.attributes(
+                '-alpha',
+                0.18
+            )
+        except tk.TclError:
+            pass
+
+        top_border = tk.Frame(
+            box,
+            bg=border
+        )
+
+        bottom_border = tk.Frame(
+            box,
+            bg=border
+        )
+
+        left_border = tk.Frame(
+            box,
+            bg=border
+        )
+
+        right_border = tk.Frame(
+            box,
+            bg=border
+        )
+
+        top_border.place(
+            x=0,
+            y=0,
+            relwidth=1,
+            height=2
+        )
+
+        bottom_border.place(
+            x=0,
+            rely=1,
+            y=-2,
+            relwidth=1,
+            height=2
+        )
+
+        left_border.place(
+            x=0,
+            y=0,
+            width=2,
+            relheight=1
+        )
+
+        right_border.place(
+            relx=1,
+            x=-2,
+            y=0,
+            width=2,
+            relheight=1
+        )
+
+        widgets = (
+            box,
+            top_border,
+            bottom_border,
+            left_border,
+            right_border
+        )
+
+        for widget in widgets:
+
+            widget.bind(
+                '<B1-Motion>',
+                self._history_box_motion
+            )
+
+            widget.bind(
+                '<ButtonRelease-1>',
+                self._history_box_release
+            )
+
+        try:
+            box.grab_set()
+        except tk.TclError:
+            pass
+
+        self._history_box_window = box
+
+
+    def _history_box_motion(self, event):
+
+        if not self._history_box_active:
+            return
+
+        if not self._history_box_start:
+            return
+
+        start_x, start_y = (
+            self._history_box_start
+        )
+
+        current_x = event.x_root
+        current_y = event.y_root
+
+        # 普通点击不显示框
+        if (
+            abs(current_x - start_x) < 4
+            and abs(current_y - start_y) < 4
+        ):
+            return 'break'
+
+        tree_left = (
+            self.history_tree.winfo_rootx()
+        )
+
+        tree_top = (
+            self.history_tree.winfo_rooty()
+        )
+
+        tree_right = (
+            tree_left
+            + self.history_tree.winfo_width()
+        )
+
+        tree_bottom = (
+            tree_top
+            + self.history_tree.winfo_height()
+        )
+
+        # 框只能存在于历史列表内部
+        start_x = min(
+            max(start_x, tree_left),
+            tree_right
+        )
+
+        current_x = min(
+            max(current_x, tree_left),
+            tree_right
+        )
+
+        start_y = min(
+            max(start_y, tree_top),
+            tree_bottom
+        )
+
+        current_y = min(
+            max(current_y, tree_top),
+            tree_bottom
+        )
+
+        left = min(
+            start_x,
+            current_x
+        )
+
+        top = min(
+            start_y,
+            current_y
+        )
+
+        right = max(
+            start_x,
+            current_x
+        )
+
+        bottom = max(
+            start_y,
+            current_y
+        )
+
+        width = max(
+            2,
+            right - left
+        )
+
+        height = max(
+            2,
+            bottom - top
+        )
+
+        self._create_history_box()
+
+        self._history_box_window.geometry(
+            f'{width}x{height}+{left}+{top}'
+        )
+
+        self._history_box_window.lift()
+
+        # 转成 Treeview 内部坐标
+        local_left = (
+            left - tree_left
+        )
+
+        local_right = (
+            right - tree_left
+        )
+
+        local_top = (
+            top - tree_top
+        )
+
+        local_bottom = (
+            bottom - tree_top
+        )
+
+        selected = []
+
+        columns = (
+            'file',
+            'date',
+            'duration',
+            'mode',
+            'timestamps'
+        )
+
+        for item in (
+            self.history_tree.get_children()
+        ):
+
+            boxes = []
+
+            for column in columns:
+
+                bbox = self.history_tree.bbox(
+                    item,
+                    column
+                )
+
+                if bbox:
+                    boxes.append(
+                        bbox
+                    )
+
+            if not boxes:
+                continue
+
+            row_left = min(
+                box[0]
+                for box in boxes
+            )
+
+            row_right = max(
+                box[0] + box[2]
+                for box in boxes
+            )
+
+            row_top = min(
+                box[1]
+                for box in boxes
+            )
+
+            row_bottom = max(
+                box[1] + box[3]
+                for box in boxes
+            )
+
+            # 矩形与这一行有交集
+            if (
+                row_right >= local_left
+                and row_left <= local_right
+                and row_bottom >= local_top
+                and row_top <= local_bottom
+            ):
+                selected.append(
+                    item
+                )
+
+        current_selection = (
+            self.history_tree.selection()
+        )
+
+        if current_selection:
+            self.history_tree.selection_remove(
+                *current_selection
+            )
+
+        if selected:
+            self.history_tree.selection_set(
+                *selected
+            )
+
+        return 'break'
+
+
+    def _history_box_release(self, event):
+
+        if not self._history_box_active:
+            return
+
+        self._history_box_active = False
+        self._history_box_start = None
+
+        self._destroy_history_box()
+
+        return 'break'
+
+
+    def _destroy_history_box(self):
+
+        box = getattr(
+            self,
+            '_history_box_window',
+            None
+        )
+
+        if box is None:
+            return
+
+        try:
+            box.grab_release()
+        except tk.TclError:
+            pass
+
+        try:
+            box.destroy()
+        except tk.TclError:
+            pass
+
+        self._history_box_window = None
+
+    # ---------------------------------------------------------
+    # Selected record
+    # ---------------------------------------------------------
+
+    def _selected_history_id(self):
+
+        selection = (
+            self.history_tree.selection()
+        )
+
+        if not selection:
+
+            messagebox.showinfo(
+                self.htext('title'),
+                self.htext(
+                    'no_selection'
+                )
+            )
+
+            return None
+
+        return selection[0]
+
+    # ---------------------------------------------------------
+    # Rename
+    # ---------------------------------------------------------
+
+    def rename_selected_history(self):
+
+        record_id = (
+            self._selected_history_id()
+        )
+
+        if not record_id:
+            return
+
+        path = self._history_paths.get(
+            record_id
+        )
+
+        if not path:
+            return
+
+        if not os.path.isfile(path):
+
+            self._handle_missing_record(
+                record_id
+            )
+
+            return
+
+        dialog = tk.Toplevel(
+            self.root
+        )
+
+        dialog.title(
+            self.mtext('rename_title')
+        )
+
+        dialog.transient(
+            self.root
+        )
+
+        dialog.grab_set()
+
+        dialog.resizable(
+            False,
+            False
+        )
+
+        frame = ttk.Frame(
+            dialog,
+            padding=20
+        )
+
+        frame.pack(
+            fill='both',
+            expand=True
+        )
+
+        ttk.Label(
+            frame,
+            text=self.mtext('new_name'),
+            style='Body.TLabel'
+        ).pack(
+            anchor='w',
+            pady=(0, 8)
+        )
+
+        old_name = os.path.basename(
+            path
+        )
+
+        name_var = tk.StringVar(
+            value=old_name
+        )
+
+        entry = ttk.Entry(
+            frame,
+            textvariable=name_var,
+            width=45
+        )
+
+        entry.pack(
+            fill='x'
+        )
+
+        entry.focus_set()
+
+        entry.selection_range(
+            0,
+            len(
+                os.path.splitext(
+                    old_name
+                )[0]
+            )
+        )
+
+        buttons = ttk.Frame(
+            frame
+        )
+
+        buttons.pack(
+            fill='x',
+            pady=(16, 0)
+        )
+
+        def confirm():
+
+            new_name = (
+                name_var.get().strip()
+            )
+
+            if not new_name:
+
+                messagebox.showwarning(
+                    self.mtext(
+                        'rename_title'
+                    ),
+                    self.mtext(
+                        'rename_empty'
+                    ),
+                    parent=dialog
+                )
+
+                return
+
+            if re.search(
+                INVALID_FILENAME_CHARS,
+                new_name
+            ):
+
+                messagebox.showwarning(
+                    self.mtext(
+                        'rename_title'
+                    ),
+                    self.mtext(
+                        'rename_invalid'
+                    ),
+                    parent=dialog
+                )
+
+                return
+
+            if not new_name.lower().endswith(
+                '.txt'
+            ):
+
+                new_name += '.txt'
+
+            new_path = os.path.join(
+                os.path.dirname(path),
+                new_name
+            )
+
+            if (
+                os.path.normcase(new_path)
+                != os.path.normcase(path)
+                and os.path.exists(new_path)
+            ):
+
+                messagebox.showwarning(
+                    self.mtext(
+                        'rename_title'
+                    ),
+                    self.mtext(
+                        'rename_exists'
+                    ),
+                    parent=dialog
+                )
+
+                return
+
+            try:
+
+                os.replace(
+                    path,
+                    new_path
+                )
+
+                with self._history_connection() as connection:
+
+                    connection.execute(
+                        '''
+                        UPDATE recordings
+                        SET
+                            filename = ?,
+                            filepath = ?
+                        WHERE id = ?
+                        ''',
+                        (
+                            new_name,
+                            os.path.abspath(
+                                new_path
+                            ),
+                            int(
+                                record_id
+                            )
+                        )
+                    )
+
+            except (
+                OSError,
+                sqlite3.Error
+            ) as error:
+
+                messagebox.showerror(
+                    self.t('Error'),
+                    str(error),
+                    parent=dialog
+                )
+
+                return
+
+            dialog.destroy()
+
+            self.refresh_history_list()
+
+        ttk.Button(
+            buttons,
+            text='OK',
+            style='Primary.TButton',
+            command=confirm
+        ).pack(
+            side='right'
+        )
+
+        ttk.Button(
+            buttons,
+            text=self.t('Back'),
+            style='Secondary.TButton',
+            command=dialog.destroy
+        ).pack(
+            side='right',
+            padx=(0, 8)
+        )
+
+        dialog.bind(
+            '<Return>',
+            lambda event: confirm()
+        )
+
+        dialog.bind(
+            '<Escape>',
+            lambda event:
+            dialog.destroy()
+        )
+
+    # ---------------------------------------------------------
+    # Delete
+    # ---------------------------------------------------------
+
+    def delete_selected_history(self):
+
+        selections = list(
+            self.history_tree.selection()
+        )
+
+        if not selections:
+
+            messagebox.showinfo(
+                self.htext('title'),
+                self.htext('no_selection')
+            )
+
+            return
+
+        count = len(selections)
+
+        answer = messagebox.askyesno(
+            self.mtext('delete_title'),
+            self.mtext('delete_confirm')
+            + f'\n\n{count}'
+        )
+
+        if not answer:
+            return
+
+        deleted_ids = []
+        errors = []
+
+        for record_id in selections:
+
+            path = self._history_paths.get(
+                record_id
+            )
+
+            if not path:
+                continue
+
+            # TXT 还存在就删除文件
+            if os.path.isfile(path):
+
+                try:
+
+                    os.remove(
+                        path
+                    )
+
+                except OSError as error:
+
+                    errors.append(
+                        os.path.basename(path)
+                        + '\n'
+                        + str(error)
+                    )
+
+                    continue
+
+            # 文件不存在时，也可以清理历史数据库
+            deleted_ids.append(
+                int(record_id)
+            )
+
+        if deleted_ids:
+
+            try:
+
+                with self._history_connection() as connection:
+
+                    connection.executemany(
+                        '''
+                        DELETE FROM recordings
+                        WHERE id = ?
+                        ''',
+                        [
+                            (record_id,)
+                            for record_id
+                            in deleted_ids
+                        ]
+                    )
+
+            except sqlite3.Error as error:
+
+                messagebox.showerror(
+                    self.t('Error'),
+                    str(error)
+                )
+
+                return
+
+        self.refresh_history_list()
+
+        if errors:
+
+            messagebox.showerror(
+                self.t('Error'),
+                '\n\n'.join(errors)
+            )
+
+    # ---------------------------------------------------------
+    # Missing file
+    # ---------------------------------------------------------
+
+    def _handle_missing_record(
+        self,
+        record_id
+    ):
+
+        answer = messagebox.askyesno(
+            self.htext('title'),
+            self.mtext(
+                'missing_remove'
+            )
+        )
+
+        if not answer:
+            return
+
+        try:
+
+            with self._history_connection() as connection:
+
+                connection.execute(
+                    '''
+                    DELETE FROM recordings
+                    WHERE id = ?
+                    ''',
+                    (
+                        int(
+                            record_id
+                        ),
+                    )
+                )
+
+        except sqlite3.Error as error:
+
+            messagebox.showerror(
+                self.t('Error'),
+                str(error)
+            )
+
+            return
+
+        self.refresh_history_list()
+
+    # ---------------------------------------------------------
+    # Language
+    # ---------------------------------------------------------
+
+    def change_language(
+        self,
+        event=None
+    ):
+
+        super().change_language(
+            event
+        )
+
+        if not hasattr(
+            self,
+            'history_rename_button'
+        ):
+            return
+
+        self.history_rename_button.configure(
+            text=self.mtext('rename')
+        )
+
+        self.history_delete_button.configure(
+            text=self.mtext('delete')
+        )
+
+        self._refresh_manager_comboboxes()
+
+        self.refresh_history_list()
+
+
+# ============================================================
+# v1.3.0 - Final Library Features
+# Internal Reader / Auto Relocation / Recycle Bin Delete
+# ============================================================
+
+class LiveCaptionsRecorderV13Final(
+    LiveCaptionsRecorderV13Manager
+):
+
+    FINAL_UI = {
+
+        'en': {
+            'search_inside': 'Search in transcript:',
+            'previous': 'Previous',
+            'next': 'Next',
+            'copy_all': 'Copy All',
+            'copied': 'Copied!',
+            'open_folder': 'Open Folder',
+
+            'read_error':
+                'Unable to read this TXT file.\n\n',
+
+            'missing_locate':
+                'This TXT file was moved or renamed and could not be '
+                'found automatically.\n\n'
+                'Locate it now?',
+
+            'wrong_file':
+                'The selected TXT file does not match the original '
+                'recording.',
+
+            'recycle_title':
+                'Move to Recycle Bin',
+
+            'recycle_confirm':
+                'Move the selected TXT file(s) to the Windows '
+                'Recycle Bin and remove them from history?',
+
+            'recycle_failed':
+                'Unable to move this file to the Recycle Bin:\n\n',
+        },
+
+        'ko': {
+            'search_inside': '자막 내용 검색:',
+            'previous': '이전',
+            'next': '다음',
+            'copy_all': '전체 복사',
+            'copied': '복사 완료!',
+            'open_folder': '폴더 열기',
+
+            'read_error':
+                'TXT 파일을 읽을 수 없습니다.\n\n',
+
+            'missing_locate':
+                'TXT 파일이 이동되었거나 이름이 변경되어 '
+                '자동으로 찾지 못했습니다.\n\n'
+                '지금 위치를 지정할까요?',
+
+            'wrong_file':
+                '선택한 TXT 파일이 원래 기록과 일치하지 않습니다.',
+
+            'recycle_title':
+                '휴지통으로 이동',
+
+            'recycle_confirm':
+                '선택한 TXT 파일을 Windows 휴지통으로 이동하고 '
+                '기록에서도 제거할까요?',
+
+            'recycle_failed':
+                '파일을 휴지통으로 이동하지 못했습니다:\n\n',
+        },
+
+        'zh_CN': {
+            'search_inside': '在正文中搜索：',
+            'previous': '上一个',
+            'next': '下一个',
+            'copy_all': '复制全部文字',
+            'copied': '已复制！',
+            'open_folder': '打开所在文件夹',
+
+            'read_error':
+                '无法读取这个 TXT 文件。\n\n',
+
+            'missing_locate':
+                '这个 TXT 文件可能被移动或重命名了，'
+                '自动搜索没有找到。\n\n'
+                '要现在手动重新定位吗？',
+
+            'wrong_file':
+                '你选择的 TXT 文件与原来的记录不一致。',
+
+            'recycle_title':
+                '移到回收站',
+
+            'recycle_confirm':
+                '将选中的 TXT 文件移到 Windows 回收站，'
+                '并从历史记录中移除吗？',
+
+            'recycle_failed':
+                '无法把这个文件移到回收站：\n\n',
+        },
+
+        'zh_TW': {
+            'search_inside': '在正文中搜尋：',
+            'previous': '上一個',
+            'next': '下一個',
+            'copy_all': '複製全部文字',
+            'copied': '已複製！',
+            'open_folder': '開啟所在資料夾',
+
+            'read_error':
+                '無法讀取這個 TXT 檔案。\n\n',
+
+            'missing_locate':
+                '這個 TXT 檔案可能被移動或重新命名了，'
+                '自動搜尋沒有找到。\n\n'
+                '要現在手動重新定位嗎？',
+
+            'wrong_file':
+                '你選擇的 TXT 檔案與原來的記錄不一致。',
+
+            'recycle_title':
+                '移到資源回收筒',
+
+            'recycle_confirm':
+                '將選取的 TXT 檔案移到 Windows 資源回收筒，'
+                '並從歷史記錄中移除嗎？',
+
+            'recycle_failed':
+                '無法把這個檔案移到資源回收筒：\n\n',
+        },
+
+        'ja': {
+            'search_inside': '字幕内を検索：',
+            'previous': '前へ',
+            'next': '次へ',
+            'copy_all': '全文をコピー',
+            'copied': 'コピーしました！',
+            'open_folder': '保存先を開く',
+
+            'read_error':
+                'TXT ファイルを読み込めません。\n\n',
+
+            'missing_locate':
+                'TXT ファイルが移動または名前変更され、'
+                '自動検索で見つかりませんでした。\n\n'
+                '今すぐ場所を指定しますか？',
+
+            'wrong_file':
+                '選択した TXT ファイルは元の記録と一致しません。',
+
+            'recycle_title':
+                'ごみ箱へ移動',
+
+            'recycle_confirm':
+                '選択した TXT ファイルをごみ箱へ移動し、'
+                '履歴からも削除しますか？',
+
+            'recycle_failed':
+                'ファイルをごみ箱へ移動できませんでした：\n\n',
+        },
+    }
+
+
+    def __init__(self, root):
+
+        self._relocation_in_progress = set()
+
+        self._relocation_last_try = {}
+
+        self._relocation_semaphore = (
+            threading.Semaphore(1)
+        )
+
+        super().__init__(root)
+
+
+    def ftext(self, key):
+
+        table = self.FINAL_UI.get(
+            self.language_code,
+            self.FINAL_UI['en']
+        )
+
+        return table.get(
+            key,
+            self.FINAL_UI['en'].get(
+                key,
+                key
+            )
+        )
+
+
+    # =========================================================
+    # Internal TXT Reader
+    # =========================================================
+
+    def build_ui(self):
+
+        super().build_ui()
+
+        self.build_reader_page()
+
+
+    def build_reader_page(self):
+
+        self.reader_page = ttk.Frame(
+            self.main,
+            style='App.TFrame'
+        )
+
+        self._reader_path = None
+
+        self._reader_record_id = None
+
+        self._reader_matches = []
+
+        self._reader_match_index = -1
+
+        self._reader_search_after = None
+
+        self._reader_copy_serial = 0
+
+
+        # ---------------- Header ----------------
+
+        header = ttk.Frame(
+            self.reader_page,
+            style='App.TFrame'
+        )
+
+        header.pack(
+            fill='x',
+            pady=(0, 16)
+        )
+
+
+        self.reader_back_button = ttk.Button(
+            header,
+            text=self.t('Back'),
+            style='Secondary.TButton',
+            command=self.show_history_page
+        )
+
+        self.reader_back_button.pack(
+            side='left',
+            padx=(0, 18)
+        )
+
+
+        title_area = ttk.Frame(
+            header,
+            style='App.TFrame'
+        )
+
+        title_area.pack(
+            side='left',
+            fill='x',
+            expand=True
+        )
+
+
+        self.reader_title_var = tk.StringVar(
+            value=''
+        )
+
+        self.reader_meta_var = tk.StringVar(
+            value=''
+        )
+
+
+        self.reader_title_label = ttk.Label(
+            title_area,
+            textvariable=self.reader_title_var,
+            style='Title.TLabel'
+        )
+
+        self.reader_title_label.pack(
+            anchor='w'
+        )
+
+
+        self.reader_meta_label = ttk.Label(
+            title_area,
+            textvariable=self.reader_meta_var,
+            style='Subtitle.TLabel'
+        )
+
+        self.reader_meta_label.pack(
+            anchor='w',
+            pady=(3, 0)
+        )
+
+
+        # ---------------- Search ----------------
+
+        search_card = ttk.Frame(
+            self.reader_page,
+            style='Card.TFrame',
+            padding=(14, 12)
+        )
+
+        search_card.pack(
+            fill='x',
+            pady=(0, 12)
+        )
+
+        search_card.columnconfigure(
+            1,
+            weight=1
+        )
+
+
+        self.reader_search_label = ttk.Label(
+            search_card,
+            text=self.ftext(
+                'search_inside'
+            ),
+            style='Body.TLabel'
+        )
+
+        self.reader_search_label.grid(
+            row=0,
+            column=0,
+            sticky='w',
+            padx=(0, 10)
+        )
+
+
+        self.reader_search_var = tk.StringVar()
+
+
+        self.reader_search_entry = ttk.Entry(
+            search_card,
+            textvariable=self.reader_search_var,
+            style='Modern.TEntry'
+        )
+
+        self.reader_search_entry.grid(
+            row=0,
+            column=1,
+            sticky='ew',
+            padx=(0, 10)
+        )
+
+
+        self.reader_match_var = tk.StringVar(
+            value='0 / 0'
+        )
+
+        self.reader_match_label = ttk.Label(
+            search_card,
+            textvariable=self.reader_match_var,
+            style='CardHint.TLabel'
+        )
+
+        self.reader_match_label.grid(
+            row=0,
+            column=2,
+            padx=(0, 10)
+        )
+
+
+        self.reader_prev_button = ttk.Button(
+            search_card,
+            text=self.ftext(
+                'previous'
+            ),
+            style='Secondary.TButton',
+            command=self.reader_previous_match
+        )
+
+        self.reader_prev_button.grid(
+            row=0,
+            column=3,
+            padx=(0, 8)
+        )
+
+
+        self.reader_next_button = ttk.Button(
+            search_card,
+            text=self.ftext(
+                'next'
+            ),
+            style='Secondary.TButton',
+            command=self.reader_next_match
+        )
+
+        self.reader_next_button.grid(
+            row=0,
+            column=4
+        )
+
+
+        # ---------------- Text ----------------
+
+        text_card = ttk.Frame(
+            self.reader_page,
+            style='Card.TFrame',
+            padding=12
+        )
+
+        text_card.pack(
+            fill='both',
+            expand=True
+        )
+
+        text_card.columnconfigure(
+            0,
+            weight=1
+        )
+
+        text_card.rowconfigure(
+            0,
+            weight=1
+        )
+
+
+        self.reader_text = tk.Text(
+            text_card,
+            wrap='word',
+            height=22,
+            relief='flat',
+            borderwidth=0,
+            highlightthickness=0,
+            padx=12,
+            pady=10,
+            font=('Segoe UI', 10),
+            undo=False
+        )
+
+        self.reader_text.grid(
+            row=0,
+            column=0,
+            sticky='nsew'
+        )
+
+
+        self.reader_scroll = ttk.Scrollbar(
+            text_card,
+            orient='vertical',
+            command=self.reader_text.yview
+        )
+
+        self.reader_scroll.grid(
+            row=0,
+            column=1,
+            sticky='ns',
+            padx=(8, 0)
+        )
+
+
+        self.reader_text.configure(
+            yscrollcommand=
+                self.reader_scroll.set,
+            state='disabled'
+        )
+
+
+        # ---------------- Bottom ----------------
+
+        actions = ttk.Frame(
+            self.reader_page,
+            style='App.TFrame'
+        )
+
+        actions.pack(
+            fill='x',
+            pady=(12, 0)
+        )
+
+
+        self.reader_copy_button = ttk.Button(
+            actions,
+            text=self.ftext(
+                'copy_all'
+            ),
+            style='Primary.TButton',
+            command=self.reader_copy_all
+        )
+
+        self.reader_copy_button.pack(
+            side='left'
+        )
+
+
+        self.reader_folder_button = ttk.Button(
+            actions,
+            text=self.ftext(
+                'open_folder'
+            ),
+            style='Secondary.TButton',
+            command=self.reader_open_folder
+        )
+
+        self.reader_folder_button.pack(
+            side='left',
+            padx=(8, 0)
+        )
+
+
+        self.reader_search_var.trace_add(
+            'write',
+            self._reader_search_changed
+        )
+
+
+        self.reader_search_entry.bind(
+            '<Return>',
+            lambda event:
+            self.reader_next_match()
+        )
+
+
+        self.reader_search_entry.bind(
+            '<Shift-Return>',
+            lambda event:
+            self.reader_previous_match()
+        )
+
+
+    # =========================================================
+    # Page switching
+    # =========================================================
+
+    def show_home(self):
+
+        if hasattr(
+            self,
+            'reader_page'
+        ):
+
+            self.reader_page.pack_forget()
+
+        super().show_home()
+
+
+    def show_history_page(self):
+
+        if hasattr(
+            self,
+            'reader_page'
+        ):
+
+            self.reader_page.pack_forget()
+
+        super().show_history_page()
+
+
+    def show_reader_page(self):
+
+        self.home_page.pack_forget()
+
+        self.detail_page.pack_forget()
+
+        self.history_page.pack_forget()
+
+
+        self.reader_page.pack(
+            fill='both',
+            expand=True
+        )
+
+
+        self.main_canvas.yview_moveto(
+            0
+        )
+
+
+    # =========================================================
+    # Open TXT in the application
+    # =========================================================
+
+    def open_selected_history(self):
+
+        record_id = (
+            self._selected_history_id()
+        )
+
+        if not record_id:
+            return
+
+
+        path = self._history_paths.get(
+            record_id
+        )
+
+        if not path:
+            return
+
+
+        if not os.path.isfile(path):
+
+            path = self._handle_missing_record(
+                record_id
+            )
+
+            if not path:
+                return
+
+
+        try:
+
+            with open(
+                path,
+                'r',
+                encoding='utf-8-sig',
+                errors='replace'
+            ) as source:
+
+                content = source.read()
+
+        except OSError as error:
+
+            messagebox.showerror(
+                self.t('Error'),
+                self.ftext(
+                    'read_error'
+                )
+                + str(error)
+            )
+
+            return
+
+
+        self._reader_path = path
+
+        self._reader_record_id = (
+            str(record_id)
+        )
+
+
+        self.reader_title_var.set(
+            os.path.basename(path)
+        )
+
+
+        self._reader_refresh_metadata()
+
+
+        self.reader_text.configure(
+            state='normal'
+        )
+
+        self.reader_text.delete(
+            '1.0',
+            'end'
+        )
+
+        self.reader_text.insert(
+            '1.0',
+            content
+        )
+
+        self.reader_text.configure(
+            state='disabled'
+        )
+
+
+        self.reader_search_var.set('')
+
+        self._reader_matches = []
+
+        self._reader_match_index = -1
+
+        self.reader_match_var.set(
+            '0 / 0'
+        )
+
+
+        self.show_reader_page()
+
+
+        self.reader_text.see(
+            '1.0'
+        )
+
+        self.reader_search_entry.focus_set()
+
+
+    # =========================================================
+    # Reader metadata
+    # =========================================================
+
+    def _reader_refresh_metadata(self):
+
+        if not self._reader_record_id:
+
+            self.reader_meta_var.set('')
+
+            return
+
+
+        try:
+
+            with self._history_connection() as connection:
+
+                row = connection.execute(
+                    '''
+                    SELECT
+                        created_at,
+                        duration_seconds,
+                        mode,
+                        timestamps
+                    FROM recordings
+                    WHERE id = ?
+                    ''',
+                    (
+                        int(
+                            self._reader_record_id
+                        ),
+                    )
+                ).fetchone()
+
+        except sqlite3.Error:
+
+            row = None
+
+
+        if not row:
+
+            self.reader_meta_var.set('')
+
+            return
+
+
+        (
+            created_at,
+            duration_seconds,
+            mode,
+            timestamps
+        ) = row
+
+
+        if mode == MODE_MICROPHONE:
+
+            mode_text = self.htext(
+                'microphone'
+            )
+
+        else:
+
+            mode_text = self.htext(
+                'system'
+            )
+
+
+        timestamp_text = (
+            self.htext('yes')
+            if timestamps
+            else self.htext('no')
+        )
+
+
+        self.reader_meta_var.set(
+            f'{created_at}  ·  '
+            f'{self.format_duration(duration_seconds)}  ·  '
+            f'{mode_text}  ·  '
+            f'{self.htext("timestamps")}: '
+            f'{timestamp_text}'
+        )
+
+
+    # =========================================================
+    # Reader search + highlight
+    # =========================================================
+
+    def _reader_search_changed(
+        self,
+        *args
+    ):
+
+        if (
+            self._reader_search_after
+            is not None
+        ):
+
+            try:
+
+                self.root.after_cancel(
+                    self._reader_search_after
+                )
+
+            except tk.TclError:
+
+                pass
+
+
+        self._reader_search_after = (
+            self.root.after(
+                120,
+                self._reader_run_search
+            )
+        )
+
+
+    def _reader_run_search(self):
+
+        self._reader_search_after = None
+
+
+        widget = self.reader_text
+
+
+        query = (
+            self.reader_search_var
+            .get()
+        )
+
+
+        widget.tag_remove(
+            'reader_match',
+            '1.0',
+            'end'
+        )
+
+        widget.tag_remove(
+            'reader_active',
+            '1.0',
+            'end'
+        )
+
+
+        self._reader_matches = []
+
+        self._reader_match_index = -1
+
+
+        if not query:
+
+            self.reader_match_var.set(
+                '0 / 0'
+            )
+
+            return
+
+
+        start = '1.0'
+
+
+        count = tk.IntVar(
+            master=self.root,
+            value=0
+        )
+
+
+        while True:
+
+            count.set(0)
+
+
+            index = widget.search(
+                query,
+                start,
+                stopindex='end',
+                nocase=True,
+                count=count
+            )
+
+
+            if not index:
+                break
+
+
+            length = count.get()
+
+
+            if length <= 0:
+                break
+
+
+            end = (
+                f'{index}+{length}c'
+            )
+
+
+            self._reader_matches.append(
+                (
+                    index,
+                    end
+                )
+            )
+
+
+            widget.tag_add(
+                'reader_match',
+                index,
+                end
+            )
+
+
+            start = end
+
+
+        if self._reader_matches:
+
+            self._reader_show_match(
+                0
+            )
+
+        else:
+
+            self.reader_match_var.set(
+                '0 / 0'
+            )
+
+
+    def _reader_show_match(
+        self,
+        index
+    ):
+
+        if not self._reader_matches:
+
+            self.reader_match_var.set(
+                '0 / 0'
+            )
+
+            return
+
+
+        index %= len(
+            self._reader_matches
+        )
+
+
+        self._reader_match_index = index
+
+
+        start, end = (
+            self._reader_matches[
+                index
+            ]
+        )
+
+
+        self.reader_text.tag_remove(
+            'reader_active',
+            '1.0',
+            'end'
+        )
+
+
+        self.reader_text.tag_add(
+            'reader_active',
+            start,
+            end
+        )
+
+
+        self.reader_text.see(
+            start
+        )
+
+
+        self.reader_match_var.set(
+            f'{index + 1} / '
+            f'{len(self._reader_matches)}'
+        )
+
+
+    def reader_next_match(self):
+
+        if not self._reader_matches:
+
+            self._reader_run_search()
+
+            if not self._reader_matches:
+                return
+
+
+        self._reader_show_match(
+            self._reader_match_index + 1
+        )
+
+
+    def reader_previous_match(self):
+
+        if not self._reader_matches:
+
+            self._reader_run_search()
+
+            if not self._reader_matches:
+                return
+
+
+        self._reader_show_match(
+            self._reader_match_index - 1
+        )
+
+
+    # =========================================================
+    # Reader buttons
+    # =========================================================
+
+    def reader_copy_all(self):
+
+        text_value = self.reader_text.get(
+            '1.0',
+            'end-1c'
+        )
+
+
+        if not text_value:
+            return
+
+
+        self.root.clipboard_clear()
+
+        self.root.clipboard_append(
+            text_value
+        )
+
+
+        self._reader_copy_serial += 1
+
+
+        serial = (
+            self._reader_copy_serial
+        )
+
+
+        self.reader_copy_button.configure(
+            text=self.ftext(
+                'copied'
+            )
+        )
+
+
+        def restore():
+
+            if (
+                serial
+                == self._reader_copy_serial
+            ):
+
+                self.reader_copy_button.configure(
+                    text=self.ftext(
+                        'copy_all'
+                    )
+                )
+
+
+        self.root.after(
+            1200,
+            restore
+        )
+
+
+    def reader_open_folder(self):
+
+        path = self._reader_path
+
+
+        if not path:
+            return
+
+
+        if not os.path.isfile(path):
+
+            if self._reader_record_id:
+
+                new_path = (
+                    self._handle_missing_record(
+                        self._reader_record_id
+                    )
+                )
+
+                if new_path:
+                    path = new_path
+
+                else:
+                    return
+
+
+        try:
+
+            subprocess.Popen(
+                [
+                    'explorer.exe',
+                    '/select,',
+                    os.path.normpath(
+                        path
+                    )
+                ]
+            )
+
+        except OSError as error:
+
+            messagebox.showerror(
+                self.t('Error'),
+                str(error)
+            )
+
+
+    # =========================================================
+    # Reader Theme
+    # =========================================================
+
+    def apply_system_theme(
+        self,
+        force=False
+    ):
+
+        super().apply_system_theme(
+            force=force
+        )
+
+
+        if not hasattr(
+            self,
+            'reader_text'
+        ):
+
+            return
+
+
+        colors = self.colors
+
+
+        self.reader_text.configure(
+            bg=colors['card'],
+            fg=colors['text'],
+            insertbackground=
+                colors['text'],
+            selectbackground=
+                colors['accent'],
+            selectforeground='#ffffff'
+        )
+
+
+        if self.current_dark_mode:
+
+            normal_background = (
+                '#665c00'
+            )
+
+            normal_foreground = (
+                '#fff4a3'
+            )
+
+            active_background = (
+                '#b56a00'
+            )
+
+            active_foreground = (
+                '#ffffff'
+            )
+
+        else:
+
+            normal_background = (
+                '#fff1a8'
+            )
+
+            normal_foreground = (
+                '#1a1a1a'
+            )
+
+            active_background = (
+                '#ffb900'
+            )
+
+            active_foreground = (
+                '#1a1a1a'
+            )
+
+
+        # All search results
+
+        self.reader_text.tag_configure(
+            'reader_match',
+            background=
+                normal_background,
+            foreground=
+                normal_foreground
+        )
+
+
+        # Current search result
+
+        self.reader_text.tag_configure(
+            'reader_active',
+            background=
+                active_background,
+            foreground=
+                active_foreground
+        )
+
+
+    # =========================================================
+    # Reader language
+    # =========================================================
+
+    def change_language(
+        self,
+        event=None
+    ):
+
+        super().change_language(
+            event
+        )
+
+
+        if not hasattr(
+            self,
+            'reader_back_button'
+        ):
+
+            return
+
+
+        self.reader_back_button.configure(
+            text=self.t('Back')
+        )
+
+
+        self.reader_search_label.configure(
+            text=self.ftext(
+                'search_inside'
+            )
+        )
+
+
+        self.reader_prev_button.configure(
+            text=self.ftext(
+                'previous'
+            )
+        )
+
+
+        self.reader_next_button.configure(
+            text=self.ftext(
+                'next'
+            )
+        )
+
+
+        self.reader_copy_button.configure(
+            text=self.ftext(
+                'copy_all'
+            )
+        )
+
+
+        self.reader_folder_button.configure(
+            text=self.ftext(
+                'open_folder'
+            )
+        )
+
+
+        self._reader_refresh_metadata()
+
+
+    # =========================================================
+    # Reader mouse wheel
+    # =========================================================
+
+    def _on_main_wheel(
+        self,
+        event
+    ):
+
+        if event.widget in (
+            getattr(
+                self,
+                'reader_text',
+                None
+            ),
+
+            getattr(
+                self,
+                'reader_scroll',
+                None
+            )
+        ):
+
+            return
+
+
+        return super()._on_main_wheel(
+            event
+        )
+
+
+    # =========================================================
+    # File fingerprint
+    # =========================================================
+
+    @staticmethod
+    def _history_fingerprint(
+        path
+    ):
+
+        try:
+
+            size = os.path.getsize(
+                path
+            )
+
+
+            digest = hashlib.sha256()
+
+
+            with open(
+                path,
+                'rb'
+            ) as source:
+
+                while True:
+
+                    block = source.read(
+                        1024 * 1024
+                    )
+
+                    if not block:
+                        break
+
+                    digest.update(
+                        block
+                    )
+
+
+            return (
+                size,
+                digest.hexdigest()
+            )
+
+        except OSError:
+
+            return (
+                None,
+                None
+            )
+
+
+    # =========================================================
+    # Database upgrade
+    # =========================================================
+
+    def _init_history_db(self):
+
+        super()._init_history_db()
+
+
+        try:
+
+            with self._history_connection() as connection:
+
+                columns = {
+                    row[1]
+                    for row
+                    in connection.execute(
+                        '''
+                        PRAGMA table_info(
+                            recordings
+                        )
+                        '''
+                    ).fetchall()
+                }
+
+
+                if (
+                    'file_size'
+                    not in columns
+                ):
+
+                    connection.execute(
+                        '''
+                        ALTER TABLE recordings
+                        ADD COLUMN
+                        file_size INTEGER
+                        '''
+                    )
+
+
+                if (
+                    'file_hash'
+                    not in columns
+                ):
+
+                    connection.execute(
+                        '''
+                        ALTER TABLE recordings
+                        ADD COLUMN
+                        file_hash TEXT
+                        '''
+                    )
+
+
+                rows = connection.execute(
+                    '''
+                    SELECT
+                        id,
+                        filepath,
+                        file_size,
+                        file_hash
+                    FROM recordings
+                    '''
+                ).fetchall()
+
+
+            # Add fingerprints to existing
+            # History files.
+
+            for (
+                record_id,
+                path,
+                file_size,
+                file_hash
+            ) in rows:
+
+
+                if (
+                    file_size
+                    is not None
+                    and file_hash
+                ):
+
+                    continue
+
+
+                if not os.path.isfile(
+                    path
+                ):
+
+                    continue
+
+
+                size, digest = (
+                    self._history_fingerprint(
+                        path
+                    )
+                )
+
+
+                if digest is None:
+                    continue
+
+
+                with self._history_connection() as connection:
+
+                    connection.execute(
+                        '''
+                        UPDATE recordings
+                        SET
+                            file_size = ?,
+                            file_hash = ?
+                        WHERE id = ?
+                        ''',
+                        (
+                            size,
+                            digest,
+                            int(
+                                record_id
+                            )
+                        )
+                    )
+
+
+        except sqlite3.Error as error:
+
+            messagebox.showerror(
+                self.t('Error'),
+                self.htext('db_error')
+                + str(error)
+            )
+
+
+    # =========================================================
+    # Save fingerprint with new recordings
+    # =========================================================
+
+    def _save_history_record(
+        self,
+        filepath,
+        created_at,
+        duration_seconds,
+        mode,
+        timestamps
+    ):
+
+        super()._save_history_record(
+            filepath,
+            created_at,
+            duration_seconds,
+            mode,
+            timestamps
+        )
+
+
+        if (
+            not filepath
+            or not os.path.isfile(
+                filepath
+            )
+        ):
+
+            return
+
+
+        size, digest = (
+            self._history_fingerprint(
+                filepath
+            )
+        )
+
+
+        if digest is None:
+            return
+
+
+        try:
+
+            with self._history_connection() as connection:
+
+                connection.execute(
+                    '''
+                    UPDATE recordings
+                    SET
+                        file_size = ?,
+                        file_hash = ?
+                    WHERE filepath = ?
+                    ''',
+                    (
+                        size,
+                        digest,
+                        os.path.abspath(
+                            filepath
+                        )
+                    )
+                )
+
+        except sqlite3.Error:
+
+            pass
+
+
+    # =========================================================
+    # Automatic relocation
+    # =========================================================
+
+    def refresh_history_list(self):
+
+        super().refresh_history_list()
+
+
+        if not hasattr(
+            self,
+            '_relocation_in_progress'
+        ):
+
+            return
+
+
+        for (
+            record_id,
+            path
+        ) in list(
+            self._history_paths.items()
+        ):
+
+            if (
+                path
+                and not os.path.isfile(
+                    path
+                )
+            ):
+
+                self._queue_auto_relocation(
+                    record_id,
+                    path
+                )
+
+
+    # ---------------------------------------------------------
+    # Folders searched automatically
+    # ---------------------------------------------------------
+
+    def _relocation_roots(
+        self,
+        old_path
+    ):
+
+        candidates = []
+
+
+        def add(path):
+
+            if not path:
+                return
+
+
+            path = os.path.abspath(
+                os.path.expanduser(
+                    path
+                )
+            )
+
+
+            if os.path.isdir(path):
+
+                candidates.append(
+                    path
+                )
+
+
+        # Original folder
+
+        add(
+            os.path.dirname(
+                old_path
+            )
+        )
+
+
+        # Current save folder
+
+        try:
+
+            add(
+                self.save_folder.get()
+            )
+
+        except tk.TclError:
+
+            pass
+
+
+        # Common folders
+
+        home = os.path.expanduser(
+            '~'
+        )
+
+
+        add(
+            os.path.join(
+                home,
+                'Desktop'
+            )
+        )
+
+        add(
+            os.path.join(
+                home,
+                'Documents'
+            )
+        )
+
+        add(
+            os.path.join(
+                home,
+                'Downloads'
+            )
+        )
+
+
+        # OneDrive
+
+        for env_name in (
+            'OneDrive',
+            'OneDriveConsumer'
+        ):
+
+            one_drive = os.environ.get(
+                env_name
+            )
+
+            if one_drive:
+
+                add(
+                    one_drive
+                )
+
+
+        # Folders already known by
+        # other History records.
+
+        try:
+
+            with self._history_connection() as connection:
+
+                paths = connection.execute(
+                    '''
+                    SELECT filepath
+                    FROM recordings
+                    '''
+                ).fetchall()
+
+
+            for (path,) in paths:
+
+                add(
+                    os.path.dirname(
+                        path
+                    )
+                )
+
+        except sqlite3.Error:
+
+            pass
+
+
+        # Remove duplicate and nested roots.
+
+        result = []
+
+        seen = set()
+
+
+        for path in sorted(
+            candidates,
+            key=len
+        ):
+
+            normalized = os.path.normcase(
+                os.path.normpath(
+                    path
+                )
+            )
+
+
+            if normalized in seen:
+                continue
+
+
+            inside_existing = False
+
+
+            for existing in result:
+
+                try:
+
+                    if os.path.commonpath(
+                        [
+                            path,
+                            existing
+                        ]
+                    ) == existing:
+
+                        inside_existing = True
+
+                        break
+
+                except ValueError:
+
+                    pass
+
+
+            if inside_existing:
+                continue
+
+
+            seen.add(
+                normalized
+            )
+
+            result.append(
+                path
+            )
+
+
+        return result
+
+
+    # ---------------------------------------------------------
+    # Start background search
+    # ---------------------------------------------------------
+
+    def _queue_auto_relocation(
+        self,
+        record_id,
+        old_path
+    ):
+
+        key = str(
+            record_id
+        )
+
+
+        if key in (
+            self._relocation_in_progress
+        ):
+
+            return
+
+
+        now = time.monotonic()
+
+
+        previous = (
+            self._relocation_last_try
+            .get(
+                key,
+                0.0
+            )
+        )
+
+
+        # Prevent History search/filter
+        # from repeatedly scanning folders.
+
+        if (
+            now - previous
+            < 20.0
+        ):
+
+            return
+
+
+        self._relocation_last_try[
+            key
+        ] = now
+
+
+        self._relocation_in_progress.add(
+            key
+        )
+
+
+        try:
+
+            with self._history_connection() as connection:
+
+                row = connection.execute(
+                    '''
+                    SELECT
+                        filename,
+                        file_size,
+                        file_hash
+                    FROM recordings
+                    WHERE id = ?
+                    ''',
+                    (
+                        int(
+                            record_id
+                        ),
+                    )
+                ).fetchone()
+
+        except sqlite3.Error:
+
+            row = None
+
+
+        if not row:
+
+            self._relocation_in_progress.discard(
+                key
+            )
+
+            return
+
+
+        (
+            filename,
+            file_size,
+            file_hash
+        ) = row
+
+
+        roots = self._relocation_roots(
+            old_path
+        )
+
+
+        thread = threading.Thread(
+            target=
+                self._auto_relocation_worker,
+            args=(
+                key,
+                filename,
+                file_size,
+                file_hash,
+                roots
+            ),
+            daemon=True
+        )
+
+
+        thread.start()
+
+
+    # ---------------------------------------------------------
+    # Search moved TXT
+    # ---------------------------------------------------------
+
+    def _auto_relocation_worker(
+        self,
+        record_id,
+        filename,
+        file_size,
+        file_hash,
+        roots
+    ):
+
+        # Only one large folder search
+        # runs at a time.
+
+        with self._relocation_semaphore:
+
+            found = None
+
+            exact_name_candidates = []
+
+
+            skip_dirs = {
+                '.git',
+                'node_modules',
+                '__pycache__',
+                '$Recycle.Bin',
+                'System Volume Information'
+            }
+
+
+            for root in roots:
+
+                for (
+                    folder,
+                    dirs,
+                    files
+                ) in os.walk(
+                    root
+                ):
+
+                    dirs[:] = [
+                        name
+                        for name
+                        in dirs
+                        if name
+                        not in skip_dirs
+                    ]
+
+
+                    for name in files:
+
+                        if not name.lower().endswith(
+                            '.txt'
+                        ):
+
+                            continue
+
+
+                        candidate = os.path.join(
+                            folder,
+                            name
+                        )
+
+
+                        try:
+
+                            size = os.path.getsize(
+                                candidate
+                            )
+
+                        except OSError:
+
+                            continue
+
+
+                        # Size check first.
+                        # This avoids hashing every TXT.
+
+                        if (
+                            file_size
+                            is not None
+                            and size
+                            != file_size
+                        ):
+
+                            continue
+
+
+                        # Strong match:
+                        # same file contents.
+
+                        if file_hash:
+
+                            _, digest = (
+                                self._history_fingerprint(
+                                    candidate
+                                )
+                            )
+
+
+                            if (
+                                digest
+                                == file_hash
+                            ):
+
+                                found = candidate
+
+                                break
+
+
+                        # Older History item may not
+                        # yet have a fingerprint.
+
+                        elif (
+                            name.casefold()
+                            == filename.casefold()
+                        ):
+
+                            exact_name_candidates.append(
+                                candidate
+                            )
+
+
+                    if found:
+                        break
+
+
+                if found:
+                    break
+
+
+            if (
+                found is None
+                and not file_hash
+                and len(
+                    exact_name_candidates
+                ) == 1
+            ):
+
+                found = (
+                    exact_name_candidates[
+                        0
+                    ]
+                )
+
+
+        try:
+
+            self.root.after(
+                0,
+                lambda:
+                self._finish_auto_relocation(
+                    record_id,
+                    found
+                )
+            )
+
+        except tk.TclError:
+
+            pass
+
+
+    def _finish_auto_relocation(
+        self,
+        record_id,
+        new_path
+    ):
+
+        key = str(
+            record_id
+        )
+
+        self._relocation_in_progress.discard(
+            key
+        )
+
+        # -----------------------------------------------------
+        # Found the moved file:
+        # update History to its new location.
+        # -----------------------------------------------------
+
+        if (
+            new_path
+            and os.path.isfile(
+                new_path
+            )
+        ):
+
+            if self._update_history_path(
+                record_id,
+                new_path
+            ):
+
+                self.refresh_history_list()
+
+            return
+
+        # -----------------------------------------------------
+        # Nothing found:
+        # remove the History database record.
+        # -----------------------------------------------------
+
+        try:
+
+            with self._history_connection() as connection:
+
+                connection.execute(
+                    '''
+                    DELETE FROM recordings
+                    WHERE id = ?
+                    ''',
+                    (
+                        int(
+                            record_id
+                        ),
+                    )
+                )
+
+        except sqlite3.Error as error:
+
+            messagebox.showerror(
+                self.t('Error'),
+                str(error)
+            )
+
+            return
+
+        self._history_paths.pop(
+            key,
+            None
+        )
+
+        self._relocation_last_try.pop(
+            key,
+            None
+        )
+
+        if (
+            getattr(
+                self,
+                '_reader_record_id',
+                None
+            )
+            == key
+        ):
+
+            self._reader_record_id = None
+            self._reader_path = None
+
+        self.refresh_history_list()
+
+
+    # ---------------------------------------------------------
+    # Update DB path
+    # ---------------------------------------------------------
+
+    def _update_history_path(
+        self,
+        record_id,
+        new_path
+    ):
+
+        new_path = os.path.abspath(
+            new_path
+        )
+
+
+        size, digest = (
+            self._history_fingerprint(
+                new_path
+            )
+        )
+
+
+        try:
+
+            with self._history_connection() as connection:
+
+                connection.execute(
+                    '''
+                    UPDATE recordings
+                    SET
+                        filename = ?,
+                        filepath = ?,
+                        file_size = ?,
+                        file_hash = ?
+                    WHERE id = ?
+                    ''',
+                    (
+                        os.path.basename(
+                            new_path
+                        ),
+                        new_path,
+                        size,
+                        digest,
+                        int(
+                            record_id
+                        )
+                    )
+                )
+
+
+        except sqlite3.IntegrityError:
+
+            return False
+
+
+        except sqlite3.Error as error:
+
+            messagebox.showerror(
+                self.t('Error'),
+                str(error)
+            )
+
+            return False
+
+
+        self._history_paths[
+            str(
+                record_id
+            )
+        ] = new_path
+
+
+        # If this transcript is already
+        # open in Reader, update it too.
+
+        if (
+            getattr(
+                self,
+                '_reader_record_id',
+                None
+            )
+            == str(
+                record_id
+            )
+        ):
+
+            self._reader_path = (
+                new_path
+            )
+
+            self.reader_title_var.set(
+                os.path.basename(
+                    new_path
+                )
+            )
+
+
+        return True
+
+
+    # =========================================================
+    # Missing file manual fallback
+    # =========================================================
+
+    def _handle_missing_record(
+        self,
+        record_id
+    ):
+
+        answer = messagebox.askyesno(
+            self.htext('title'),
+            self.ftext(
+                'missing_locate'
+            )
+        )
+
+
+        if not answer:
+            return None
+
+
+        path = filedialog.askopenfilename(
+            title=self.htext('title'),
+            filetypes=[
+                (
+                    self.t('Text file'),
+                    '*.txt'
+                ),
+                (
+                    self.t('All files'),
+                    '*.*'
+                )
+            ]
+        )
+
+
+        if not path:
+            return None
+
+
+        try:
+
+            with self._history_connection() as connection:
+
+                row = connection.execute(
+                    '''
+                    SELECT
+                        file_size,
+                        file_hash
+                    FROM recordings
+                    WHERE id = ?
+                    ''',
+                    (
+                        int(
+                            record_id
+                        ),
+                    )
+                ).fetchone()
+
+        except sqlite3.Error:
+
+            row = None
+
+
+        expected_size = (
+            row[0]
+            if row
+            else None
+        )
+
+        expected_hash = (
+            row[1]
+            if row
+            else None
+        )
+
+
+        (
+            actual_size,
+            actual_hash
+        ) = self._history_fingerprint(
+            path
+        )
+
+
+        # If a strong fingerprint exists,
+        # reject the wrong TXT file.
+
+        if expected_hash:
+
+            if (
+                actual_hash
+                != expected_hash
+            ):
+
+                messagebox.showwarning(
+                    self.htext('title'),
+                    self.ftext(
+                        'wrong_file'
+                    )
+                )
+
+                return None
+
+
+        elif (
+            expected_size
+            is not None
+            and actual_size
+            != expected_size
+        ):
+
+            messagebox.showwarning(
+                self.htext('title'),
+                self.ftext(
+                    'wrong_file'
+                )
+            )
+
+            return None
+
+
+        if self._update_history_path(
+            record_id,
+            path
+        ):
+
+            self.refresh_history_list()
+
+            return os.path.abspath(
+                path
+            )
+
+
+        return None
+
+
+    # =========================================================
+    # Windows Recycle Bin
+    # =========================================================
+
+    @staticmethod
+    def _move_to_recycle_bin(
+        path
+    ):
+
+        class SHFILEOPSTRUCTW(
+            ctypes.Structure
+        ):
+
+            _fields_ = [
+                (
+                    'hwnd',
+                    ctypes.c_void_p
+                ),
+                (
+                    'wFunc',
+                    ctypes.c_uint
+                ),
+                (
+                    'pFrom',
+                    ctypes.c_wchar_p
+                ),
+                (
+                    'pTo',
+                    ctypes.c_wchar_p
+                ),
+                (
+                    'fFlags',
+                    ctypes.c_ushort
+                ),
+                (
+                    'fAnyOperationsAborted',
+                    ctypes.c_int
+                ),
+                (
+                    'hNameMappings',
+                    ctypes.c_void_p
+                ),
+                (
+                    'lpszProgressTitle',
+                    ctypes.c_wchar_p
+                ),
+            ]
+
+
+        FO_DELETE = 3
+
+        FOF_SILENT = 0x0004
+
+        FOF_NOCONFIRMATION = 0x0010
+
+        FOF_ALLOWUNDO = 0x0040
+
+        FOF_NOERRORUI = 0x0400
+
+
+        # SHFileOperation requires a
+        # double-null-terminated path.
+
+        source = (
+            os.path.abspath(
+                path
+            )
+            + '\0\0'
+        )
+
+
+        operation = (
+            SHFILEOPSTRUCTW()
+        )
+
+
+        operation.hwnd = None
+
+        operation.wFunc = FO_DELETE
+
+        operation.pFrom = source
+
+        operation.pTo = None
+
+
+        operation.fFlags = (
+            FOF_SILENT
+            | FOF_NOCONFIRMATION
+            | FOF_ALLOWUNDO
+            | FOF_NOERRORUI
+        )
+
+
+        operation.fAnyOperationsAborted = 0
+
+        operation.hNameMappings = None
+
+        operation.lpszProgressTitle = None
+
+
+        result = (
+            ctypes.windll.shell32
+            .SHFileOperationW(
+                ctypes.byref(
+                    operation
+                )
+            )
+        )
+
+
+        if result != 0:
+
+            raise OSError(
+                f'Windows Shell error: '
+                f'{result}'
+            )
+
+
+        if (
+            operation
+            .fAnyOperationsAborted
+        ):
+
+            raise OSError(
+                'The operation was cancelled.'
+            )
+
+
+    # =========================================================
+    # Delete -> Recycle Bin
+    # =========================================================
+
+    def delete_selected_history(self):
+
+        selections = list(
+            self.history_tree.selection()
+        )
+
+
+        if not selections:
+
+            messagebox.showinfo(
+                self.htext('title'),
+                self.htext(
+                    'no_selection'
+                )
+            )
+
+            return
+
+
+        answer = messagebox.askyesno(
+            self.ftext(
+                'recycle_title'
+            ),
+            self.ftext(
+                'recycle_confirm'
+            )
+            + f'\n\n{len(selections)}'
+        )
+
+
+        if not answer:
+            return
+
+
+        deleted_ids = []
+
+        errors = []
+
+
+        for record_id in selections:
+
+            path = (
+                self._history_paths.get(
+                    record_id
+                )
+            )
+
+
+            if not path:
+                continue
+
+
+            # Existing TXT:
+            # move to Recycle Bin.
+
+            if os.path.isfile(
+                path
+            ):
+
+                try:
+
+                    self._move_to_recycle_bin(
+                        path
+                    )
+
+                except OSError as error:
+
+                    errors.append(
+                        os.path.basename(
+                            path
+                        )
+                        + '\n'
+                        + str(error)
+                    )
+
+                    continue
+
+
+            # Missing TXT:
+            # only remove History record.
+
+            deleted_ids.append(
+                int(
+                    record_id
+                )
+            )
+
+
+        if deleted_ids:
+
+            try:
+
+                with self._history_connection() as connection:
+
+                    connection.executemany(
+                        '''
+                        DELETE FROM recordings
+                        WHERE id = ?
+                        ''',
+                        [
+                            (
+                                record_id,
+                            )
+                            for record_id
+                            in deleted_ids
+                        ]
+                    )
+
+
+            except sqlite3.Error as error:
+
+                messagebox.showerror(
+                    self.t('Error'),
+                    str(error)
+                )
+
+                return
+
+
+        self.refresh_history_list()
+
+
+        if errors:
+
+            messagebox.showerror(
+                self.t('Error'),
+                self.ftext(
+                    'recycle_failed'
+                )
+                + '\n\n'.join(
+                    errors
+                )
+            )
+
 if __name__ == '__main__':
+
     enable_high_dpi_awareness()
+
     root = tk.Tk()
+
     configure_tk_dpi(root)
-    app = LiveCaptionsRecorderV12Plus(root)
+
+    app = LiveCaptionsRecorderV13Final(
+        root
+    )
+
     root.mainloop()
